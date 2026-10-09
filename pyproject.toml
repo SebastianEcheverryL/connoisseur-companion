@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "connoisseur-companion"
+version = "0.1.0"
+description = "Restaurant and recipe recommendations with local LLMs: structured extraction, multimodal RAG, multi-agent orchestration and an MCP server."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "pydantic>=2.7",
+    "ollama>=0.6",
+    "gradio>=6.0,<7",
+    "fastmcp>=3.1,<4",
+    "mcp>=1.25,<2",
+    "anthropic>=0.84,<1",
+    "langchain-core>=0.3,<1",
+    "langchain-ollama>=0.2,<1",
+]
+
+[project.optional-dependencies]
+# Notebooks 03-08: vector index, multimodal fusion and the multi-agent graph
+notebooks = [
+    "chromadb>=1.5",
+    "sentence-transformers>=2.7",
+    "transformers",
+    "torch",
+    "pillow",
+    "numpy",
+    "matplotlib",
+    "tenacity",
+    "requests",
+    "langchain>=0.3",
+    "langchain-community>=0.3",
+    "langchain-chroma>=0.2",
+    "langgraph>=0.2",
+    "jupyter",
+]
+dev = ["pytest>=8", "ruff>=0.5", "nbstripout"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests"]

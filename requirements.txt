@@ -1,0 +1,3 @@
+# Core app (MCP server/client, Gradio host, data tooling). Dependencies live in pyproject.toml.
+# For the notebooks run:  pip install -e ".[notebooks]"   |   for development:  pip install -e ".[dev]"
+-e .

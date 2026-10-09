@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Secrets
+.env
+
+# Third-party data fetched by scripts/download_data.py (not redistributed)
+data/California-Culinary-Map.txt
+data/Recipes.json
+data/Synthetic-User-Reviews.json
+data/*.zip
+data/synthetic_recipe_images/
+data/recipe_images/
+data/review_image_placeholder.jpg
+data/augmented_food_recipe.json
+
+# Generated at runtime
+*.bak
+.gradio/
+chroma_multimodal/
+chroma_db/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

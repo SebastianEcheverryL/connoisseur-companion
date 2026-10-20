@@ -36,3 +36,4 @@ Thumbs.db
 # Local vector index and HTTP cache
 .chroma/
 .cache/
+infra/langfuse/.env

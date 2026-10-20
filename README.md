@@ -15,6 +15,7 @@ Everything runs locally with [Ollama](https://ollama.com): no paid LLM API is ne
 - **Multimodal RAG.** MiniLM text embeddings and CLIP image embeddings (ONNX via `fastembed`, no torch) in ChromaDB. Recipes are ranked by a **fusion reranker** that merges text and image similarity per recipe.
 - **Grounded answers.** The recommender may only cite retrieved candidate ids; any invented place is dropped before the answer is shown, and every pick shows its source.
 - **MCP server.** 5 read-only tools and 1 resource, served in-process to the agents and over Streamable HTTP at `/mcp/` for any MCP client.
+- **Observability with Langfuse.** One trace per request with the LangGraph nodes, every LLM generation (tokens, latency), retrieval, geocoding, OSM, Tavily and MCP tool spans, grouped by session. Prompts can be served from Langfuse Prompt Management, thumbs up/down become scores, and user coordinates, secrets, emails and phone numbers are masked before anything leaves the process.
 - **Production-minded.** Typed settings, provider factory (Ollama / Bedrock), structured logs with request ids, SSE streaming API, HTTP caching and retries for public OSM servers, and a `pytest` suite with the LLM and the network faked.
 
 ## Architecture
@@ -38,6 +39,7 @@ flowchart TD
 ```
 FastAPI  ── POST /chat (SSE)   ── LangGraph workflow ── Ollama | Bedrock
          ── POST /chat/sync
+         ── POST /feedback (Langfuse score)
          ── /mcp/  (MCP Streamable HTTP)
          ── /ui    (Gradio developer UI)
          ── GET /health
@@ -58,7 +60,8 @@ src/connoisseur/
   app.py              Gradio developer UI
   client.py           MCP client demo: tool calls, sampling and roots
   data_management.py  LLM structuring with a self-repair loop + console CRUD
-scripts/              download_data.py, build_index.py
+scripts/              download_data.py, build_index.py, sync_prompts.py
+infra/langfuse/       docker-compose for a local Langfuse
 notebooks/            the original step-by-step pipeline, 01 extraction -> 08 chatbot
 tests/                pytest suite
 ```
@@ -88,6 +91,17 @@ curl -N localhost:8000/chat -H "content-type: application/json" \
 python -m connoisseur.client                            # MCP client demo (sampling runs on Ollama)
 python -m connoisseur.data_management                   # console tool to browse/add/edit restaurants
 ```
+
+### Observability (optional)
+
+```bash
+docker compose -f infra/langfuse/docker-compose.yml up -d   # Langfuse at http://localhost:3000
+# login: dev@connoisseur.local / connoisseur-dev
+# in .env: LANGFUSE_PUBLIC_KEY=pk-lf-local-dev  LANGFUSE_SECRET_KEY=sk-lf-local-dev
+python scripts/sync_prompts.py                              # optional: publish prompts, then LANGFUSE_PROMPTS=true
+```
+
+![Langfuse trace of a recommendation](docs/screenshots/langfuse-trace.png)
 
 ### Tests
 

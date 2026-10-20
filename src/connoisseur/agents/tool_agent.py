@@ -2,6 +2,8 @@
 
 The MCP server runs in-process (FastMCP in-memory transport): no subprocess per message.
 """
+import asyncio
+
 from fastmcp import Client
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
@@ -10,6 +12,7 @@ from connoisseur.agents.state import ChatState
 from connoisseur.llm import get_chat_model, message_text
 from connoisseur.log import get_logger
 from connoisseur.observability import traced
+from connoisseur.security import spotlight
 from connoisseur.server import READ_ONLY_TOOLS, mcp
 from connoisseur.settings import get_settings
 
@@ -29,8 +32,19 @@ def _history_messages(state: ChatState) -> list:
 
 @traced("mcp_tool_call", as_type="tool")
 async def call_mcp_tool(client: Client, name: str, args: dict) -> str:
-    result = await client.call_tool(name, args, raise_on_error=False)
-    return " ".join(getattr(item, "text", str(item)) for item in result.content) or "(no result)"
+    """Call a tool with a timeout and return its output screened and wrapped as untrusted data.
+
+    Tool results contain user-generated text (reviews, descriptions): an injection hidden there must
+    not be able to steer the agent (OWASP LLM01, indirect prompt injection).
+    """
+    try:
+        result = await asyncio.wait_for(client.call_tool(name, args, raise_on_error=False),
+                                        timeout=get_settings().tool_timeout_s)
+    except TimeoutError:
+        log.warning("tool_timeout", tool=name)
+        return f"Tool '{name}' timed out."
+    output = " ".join(getattr(item, "text", str(item)) for item in result.content) or "(no result)"
+    return spotlight.wrap(output[:MAX_TOOL_OUTPUT_CHARS], source=f"tool:{name}")
 
 
 async def tool_agent(state: ChatState) -> dict:
@@ -62,7 +76,7 @@ async def tool_agent(state: ChatState) -> dict:
                     output = f"Tool '{call['name']}' is not available."
                 else:
                     output = await call_mcp_tool(client, call["name"], call["args"])
-                messages.append(ToolMessage(content=output[:MAX_TOOL_OUTPUT_CHARS], tool_call_id=call["id"]))
+                messages.append(ToolMessage(content=output, tool_call_id=call["id"]))
 
     log.warning("react_step_limit_reached", steps=max_steps)
     return {

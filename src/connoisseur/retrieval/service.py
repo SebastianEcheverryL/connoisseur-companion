@@ -67,11 +67,13 @@ def search_recipes(ctx: UserContext, k: int = 5) -> list[RecipeCandidate]:
         w_img=s.fusion_w_img,
         top_n=k,
     )
+    ingredients_by_id = {str(r["id"]): r.get("ingredients") or [] for r in data.load_recipes()}
     return [
         RecipeCandidate(
             id=f"recipe:{hit.key}",
             name=hit.metadata.get("name", hit.document),
             cuisine=hit.metadata.get("cuisine") or None,
+            ingredients=ingredients_by_id.get(hit.key, []),
             score=round(hit.fused, 4),
         )
         for hit in fused

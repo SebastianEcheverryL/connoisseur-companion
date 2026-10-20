@@ -91,6 +91,7 @@ class RecipeCandidate(BaseModel):
     id: str
     name: str
     cuisine: str | None = None
+    ingredients: list[str] = Field(default_factory=list)
     score: float = 0.0
 
 

@@ -1,9 +1,11 @@
 """Entry point used by the API and the dev UI: run the graph and stream progress events."""
+import asyncio
 import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 from connoisseur.agents.graph import get_graph
+from connoisseur.agents.nodes import guess_language, t_lang
 from connoisseur.log import get_logger
 from connoisseur.observability import langchain_callbacks, trace_request
 from connoisseur.schemas import Coordinates
@@ -13,6 +15,8 @@ log = get_logger(__name__)
 
 # Human-readable progress labels for the UI
 STEP_LABELS = {
+    "input_guard": "Checking your message",
+    "output_guard": "Checking the answer",
     "profile": "Understanding your request",
     "locate": "Finding your location",
     "ask_location": "Asking where you are",
@@ -55,14 +59,21 @@ async def stream_chat(
         tags=[get_settings().llm_provider],
     ) as trace:
         config = {"callbacks": langchain_callbacks(), "run_name": "recommendation_graph"}
-        async for update in get_graph().astream(
-            initial_state(message, history, coords), config=config, stream_mode="updates"
-        ):
-            for node, delta in update.items():
-                if node == "experts":
-                    continue
-                final.update(delta or {})
-                yield {"type": "step", "node": node, "label": STEP_LABELS.get(node, node)}
+        try:
+            # A hard ceiling per request: slow models or hung tools must not hold resources forever
+            async with asyncio.timeout(get_settings().request_timeout_s):
+                async for update in get_graph().astream(
+                    initial_state(message, history, coords), config=config, stream_mode="updates"
+                ):
+                    for node, delta in update.items():
+                        if node == "experts":
+                            continue
+                        final.update(delta or {})
+                        yield {"type": "step", "node": node, "label": STEP_LABELS.get(node, node)}
+        except TimeoutError:
+            log.warning("request_timeout", seconds=get_settings().request_timeout_s)
+            final.update({"answer": t_lang(guess_language(message), "timeout"), "cards": [],
+                          "route": [*final.get("route", []), "timeout"]})
 
         location = final.get("location")
         context = final.get("context")

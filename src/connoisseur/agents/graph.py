@@ -1,5 +1,7 @@
 """The multi-agent workflow (ported from notebook 07, with real retrieval and a web-search branch).
 
+input_guard ── (blocked) ── END
+     │
 profile ─┬─ respond                                   (help, refusals)
          ├─ tool_agent                                (lookups through MCP tools)
          ├─ retrieve_local ───────────────┐           (recipes)
@@ -8,13 +10,14 @@ profile ─┬─ respond                                   (help, refusals)
                     │                  └─ web_search  (too few local results)
                     └─ web_search ─────────┤          (outside California)
                                            ▼
-                   trend_analyst ∥ style_expert ∥ nutrition_expert  →  recommend
+                   trend_analyst ∥ style_expert ∥ nutrition_expert  →  recommend ─┐
+                                                                tool_agent ─┴─ output_guard ── END
 """
 from functools import lru_cache
 
 from langgraph.graph import END, START, StateGraph
 
-from connoisseur.agents import nodes
+from connoisseur.agents import guards, nodes
 from connoisseur.agents.state import ChatState
 from connoisseur.agents.tool_agent import tool_agent
 
@@ -23,6 +26,8 @@ EXPERTS = ("trend_analyst", "style_expert", "nutrition_expert")
 
 def build_graph():
     g = StateGraph(ChatState)
+    g.add_node("input_guard", guards.input_guard)
+    g.add_node("output_guard", guards.output_guard)
     g.add_node("profile", nodes.profile)
     g.add_node("respond", nodes.respond)
     g.add_node("tool_agent", tool_agent)
@@ -36,7 +41,8 @@ def build_graph():
     g.add_node("nutrition_expert", nodes.nutrition_expert)
     g.add_node("recommend", nodes.recommend)
 
-    g.add_edge(START, "profile")
+    g.add_edge(START, "input_guard")
+    g.add_conditional_edges("input_guard", guards.route_after_input_guard, {"blocked": END, "profile": "profile"})
     g.add_conditional_edges("profile", nodes.route_intent, ["locate", "retrieve_local", "tool_agent", "respond"])
     g.add_conditional_edges("locate", nodes.route_after_locate, ["retrieve_local", "web_search", "ask_location"])
     g.add_edge("ask_location", END)
@@ -44,9 +50,10 @@ def build_graph():
     g.add_edge("web_search", "experts")
     g.add_conditional_edges("experts", nodes.route_to_experts, [*EXPERTS, "recommend"])
     g.add_edge(list(EXPERTS), "recommend")  # join: recommend waits for all three experts
-    g.add_edge("recommend", END)
+    g.add_edge("recommend", "output_guard")
     g.add_edge("respond", END)
-    g.add_edge("tool_agent", END)
+    g.add_edge("tool_agent", "output_guard")
+    g.add_edge("output_guard", END)
     return g.compile()
 
 

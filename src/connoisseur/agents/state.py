@@ -10,6 +10,7 @@ class ChatState(TypedDict, total=False):
     message: str
     history: list[dict]  # [{"role": "user"|"assistant", "content": str}]
     coords: Coordinates | None  # optional browser geolocation, already rounded
+    blocked: bool  # set by the input guardrail
 
     # Phase 1: profile + routing
     context: UserContext

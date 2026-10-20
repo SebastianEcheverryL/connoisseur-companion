@@ -1,5 +1,6 @@
 """Nodes of the recommendation workflow. Each node reads the shared state and returns a partial update."""
 import json
+import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
@@ -11,6 +12,7 @@ from connoisseur.log import get_logger
 from connoisseur.places import osm, ratings, tavily
 from connoisseur.retrieval import service
 from connoisseur.schemas import PlaceCandidate, ProfileExtraction, RecommendationSet, UserContext
+from connoisseur.security import allergens, spotlight
 from connoisseur.settings import get_settings
 
 log = get_logger(__name__)
@@ -30,6 +32,13 @@ TEXT = {
         "none": "I couldn't find matching places{where}. Could you tell me another area or relax a filter?",
         "near": " near {place}",
         "reviews": "reviews",
+        "allergy_note": "Allergy note: I can't guarantee any dish is free of an allergen. Check the full ingredient "
+        "list and ask the restaurant about cross-contamination before eating.",
+        "blocked_input": "Sorry, I can't help with that. I'm here for restaurants, food and recipes.",
+        "blocked_injection": "That message looks like an attempt to change my instructions, so I won't follow it. "
+        "Ask me about restaurants, food or recipes instead!",
+        "blocked_output": "Sorry, I couldn't produce a safe answer for that. Could you rephrase your request?",
+        "timeout": "That took too long, sorry. Please try again, maybe with a simpler request.",
         "ask_location": "Happy to find places near you! Where are you? Tell me your city or neighbourhood "
         "(e.g. \"El Poblado, Medellín\") or share your location.",
         "location_not_found": "I couldn't find \"{place}\" on the map. Could you write it another way, "
@@ -56,6 +65,13 @@ TEXT = {
         "none": "No encontré lugares que coincidan{where}. ¿Me dices otra zona o relajamos algún filtro?",
         "near": " cerca de {place}",
         "reviews": "reseñas",
+        "allergy_note": "Nota sobre alergias: no puedo garantizar que un plato esté libre de un alérgeno. Revisa la "
+        "lista completa de ingredientes y pregunta en el restaurante por contaminación cruzada antes de comer.",
+        "blocked_input": "Lo siento, no puedo ayudarte con eso. Estoy aquí para restaurantes, comida y recetas.",
+        "blocked_injection": "Ese mensaje parece un intento de cambiar mis instrucciones, así que no lo voy a seguir. "
+        "¡Pregúntame por restaurantes, comida o recetas!",
+        "blocked_output": "Lo siento, no pude generar una respuesta segura para eso. ¿Puedes reformular tu pedido?",
+        "timeout": "Esto tardó demasiado, lo siento. Inténtalo de nuevo, quizá con un pedido más simple.",
         "ask_location": "¡Con gusto busco lugares cerca de ti! ¿Dónde estás? Dime tu ciudad o barrio "
         "(por ejemplo \"El Poblado, Medellín\") o comparte tu ubicación.",
         "location_not_found": "No encontré \"{place}\" en el mapa. ¿Me lo escribes de otra forma, "
@@ -75,8 +91,20 @@ TEXT = {
 
 
 def t(ctx: UserContext | None, key: str) -> str:
-    language = ctx.language.strip().capitalize() if ctx else "English"
-    return TEXT.get(language, TEXT["English"])[key]
+    return t_lang(ctx.language if ctx else "English", key)
+
+
+def t_lang(language: str, key: str) -> str:
+    return TEXT.get(language.strip().capitalize(), TEXT["English"])[key]
+
+
+_SPANISH_HINTS = re.compile(r"[ñ¿¡áéíóú]|\b(que|quiero|dime|c[oó]mo|d[oó]nde|para|por favor|hola|recomi[eé]ndame)\b",
+                            re.IGNORECASE)
+
+
+def guess_language(text: str) -> str:
+    """Cheap guess used before the profile agent runs (e.g. to word a refusal)."""
+    return "Spanish" if _SPANISH_HINTS.search(text) else "English"
 
 
 # ---------- helpers ----------
@@ -190,8 +218,15 @@ async def ask_location(state: ChatState) -> dict:
 async def retrieve_local(state: ChatState) -> dict:
     ctx = state["context"]
     restaurants = service.search_restaurants(ctx) if ctx.intent in ("restaurant", "both") else []
-    recipes = service.search_recipes(ctx) if ctx.intent in ("recipe", "both") else []
-    return {"local_candidates": restaurants, "recipes": recipes, "route": state["route"] + ["local"]}
+    recipes = service.search_recipes(ctx, k=8) if ctx.intent in ("recipe", "both") else []
+    route = state["route"] + ["local"]
+    allergies = allergens.detect_allergies(state["message"], ctx.dietary)
+    if allergies and recipes:
+        # Deterministic: recipes that list the allergen never reach the LLM
+        safe = [r for r in recipes if not allergens.contains_allergen(r.ingredients, allergies)]
+        route.append(f"allergen_filter:{len(recipes) - len(safe)}")
+        recipes = safe
+    return {"local_candidates": restaurants, "recipes": recipes[:5], "route": route}
 
 
 def route_after_local(state: ChatState) -> str:
@@ -220,12 +255,18 @@ async def web_search(state: ChatState) -> dict:
     if tavily.is_enabled() and places:
         places = await ratings.enrich_with_ratings(places, location.city or location.query)
         route.append("ratings")
-    # Review excerpts go to the recommender as untrusted context, tied to the place they describe
-    snippets = [
-        tavily.WebSnippet(title=p.name, url=p.review_url, content=p.review_snippet)
-        for p in places
-        if p.review_url and p.review_snippet
-    ]
+    # Review excerpts go to the recommender as untrusted context, tied to the place they describe.
+    # A page carrying an injection is dropped together with the rating parsed from it.
+    snippets = []
+    for p in places:
+        if not (p.review_url and p.review_snippet):
+            continue
+        _, blocked = spotlight.sanitize(p.review_snippet)
+        if blocked:
+            route.append("web:snippet_blocked")
+            p.rating = p.rating_source = p.review_count = p.review_url = p.review_snippet = None
+            continue
+        snippets.append(tavily.WebSnippet(title=p.name, url=p.review_url, content=p.review_snippet))
     log.info("web_search", places=len(places), rated=sum(p.rating is not None for p in places))
     return {"web_candidates": places, "web_snippets": snippets, "route": route}
 
@@ -283,9 +324,9 @@ async def recommend(state: ChatState) -> dict:
     snippets = state.get("web_snippets") or []
     web_block = ""
     if snippets:
-        web_block = "\n<untrusted_web_content>\n" + "\n".join(
-            f"- {s.title}: {s.content}" for s in snippets
-        ) + "\n</untrusted_web_content>"
+        web_block = "\nReview excerpts:\n" + "\n".join(
+            spotlight.wrap(f"{s.title}: {s.content}", source="web_review") for s in snippets
+        )
     experts = "\n".join(
         f"{name}: {state.get(key)}"
         for name, key in (("Trends", "trend_analysis"), ("Styles", "style_analysis"),
@@ -308,7 +349,8 @@ async def recommend(state: ChatState) -> dict:
         f"Expert notes:\n{experts or '(none)'}{web_block}"
     )
     picks = await structured_call(RecommendationSet, load_prompt("recommender"), user)
-    return format_answer(picks, restaurants, recipes, ctx, location)
+    allergies = allergens.detect_allergies(state["message"], ctx.dietary)
+    return format_answer(picks, restaurants, recipes, ctx, location, allergies)
 
 
 def ground(picks: RecommendationSet | None, restaurants, recipes) -> tuple[list, list]:
@@ -341,8 +383,14 @@ def _rating_text(c: PlaceCandidate, ctx: UserContext) -> str | None:
     return f"⭐ {c.rating}/5 {source}{reviews}"
 
 
-def format_answer(picks, restaurants, recipes, ctx: UserContext, location) -> dict:
+def format_answer(picks, restaurants, recipes, ctx: UserContext, location, allergies=frozenset()) -> dict:
     chosen_r, chosen_p = ground(picks, restaurants, recipes)
+    if allergies:
+        # Never let the model guarantee allergen safety (see security/allergens.py)
+        chosen_r = [(c, allergens.strip_safety_claims(why)) for c, why in chosen_r]
+        chosen_p = [(r, allergens.strip_safety_claims(why)) for r, why in chosen_p]
+        if picks:
+            picks.summary = allergens.strip_safety_claims(picks.summary)
     lines = [picks.summary] if picks and picks.summary else []
     cards = []
     if chosen_r:
@@ -365,4 +413,6 @@ def format_answer(picks, restaurants, recipes, ctx: UserContext, location) -> di
         lines.append(f"\n_{t(ctx, 'osm_credit')}_")
     if ctx.intent in ("restaurant", "both") and location is None:
         lines.append(f"\n_{t(ctx, 'tip')}_")
+    if allergies:
+        lines.append(f"\n⚠️ _{t(ctx, 'allergy_note')}_")
     return {"answer": "\n".join(lines).strip(), "cards": cards}

@@ -9,7 +9,8 @@ Everything runs locally with [Ollama](https://ollama.com): no paid LLM API is ne
 ## Highlights
 
 - **Profile agent + router.** One structured LLM call extracts intent, location, cuisines, diet, vibe, budget and language, then routes to the right branch.
-- **Web-search agent.** Outside California (or when the guide has too few matches) it geocodes the location with Nominatim, finds restaurants with Overpass, ranks them by cuisine and `diet:*` tags, and optionally adds review context from Tavily. It is deterministic on purpose: web content never decides which tool runs next.
+- **Web-search agent.** Outside California (or when the guide has too few matches) it geocodes the location with Nominatim, finds restaurants with Overpass (falling back to Photon when Overpass is busy), ranks them by cuisine and `diet:*` tags, and optionally adds review context from Tavily. It is deterministic on purpose: web content never decides which tool runs next.
+- **"Near me" that is honest.** Browser geolocation is optional and rounded to ~1 km before it leaves the page. Without a position, the agent asks where you are instead of answering from the California guide, and a place named in the message wins over the device position.
 - **Multimodal RAG.** MiniLM text embeddings and CLIP image embeddings (ONNX via `fastembed`, no torch) in ChromaDB. Recipes are ranked by a **fusion reranker** that merges text and image similarity per recipe.
 - **Grounded answers.** The recommender may only cite retrieved candidate ids; any invented place is dropped before the answer is shown, and every pick shows its source.
 - **MCP server.** 5 read-only tools and 1 resource, served in-process to the agents and over Streamable HTTP at `/mcp/` for any MCP client.
@@ -24,8 +25,9 @@ flowchart TD
     P -->|specific restaurant| T[ReAct tool agent<br/>MCP tools in-process]
     P -->|recipes| L
     P -->|restaurants| G[Locate<br/>Nominatim]
+    G -->|near me without a position| A[Ask where you are]
     G -->|California or no location| L[Local retrieval<br/>ChromaDB + fusion]
-    G -->|elsewhere| W[Web-search agent<br/>Overpass + Tavily]
+    G -->|elsewhere| W[Web-search agent<br/>Overpass / Photon + Tavily]
     L -->|too few results| W
     L --> E{{Trend ∥ Style ∥ Nutrition experts}}
     W --> E
@@ -101,7 +103,7 @@ ruff check src tests scripts
 - **Why a deterministic web agent.** Letting an LLM pick tools based on web pages invites indirect prompt injection. The web branch always runs the same steps, and web text reaches the recommender wrapped as untrusted data.
 - **Why ONNX embeddings.** `fastembed` produces the same MiniLM and CLIP vectors as the notebooks without torch, which keeps the future Lambda container small.
 - **Why per-entity fusion.** The notebook ranked text and image hits as separate rows. The package merges them per recipe, so a recipe that matches by text and by image ranks higher.
-- **Being a good OSM citizen.** Nominatim calls are throttled to 1 per second, results are cached (geocoding for a month, places for a day), Overpass falls back across public mirrors with backoff, and answers credit OpenStreetMap contributors.
+- **Being a good OSM citizen.** Nominatim calls are throttled to 1 per second, results are cached (geocoding for a month, places for a day), Overpass falls back across public mirrors with backoff, a circuit breaker skips Overpass for 5 minutes after it fails (Photon answers meanwhile), and answers credit OpenStreetMap contributors.
 
 ## Known limitations
 

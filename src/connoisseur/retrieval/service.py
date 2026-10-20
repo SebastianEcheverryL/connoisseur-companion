@@ -1,5 +1,6 @@
 """High-level retrieval over the local dataset: user context in, ranked candidates out."""
 from connoisseur import data
+from connoisseur.observability import traced
 from connoisseur.retrieval.fusion import fuse
 from connoisseur.retrieval.store import get_store
 from connoisseur.schemas import PlaceCandidate, RecipeCandidate, UserContext
@@ -28,6 +29,7 @@ def _location_filter(location: str | None) -> dict | None:
     return None
 
 
+@traced("retrieve_restaurants", as_type="retriever")
 def search_restaurants(ctx: UserContext, k: int = 8) -> list[PlaceCandidate]:
     store = get_store()
     if store is None:
@@ -50,6 +52,7 @@ def search_restaurants(ctx: UserContext, k: int = 8) -> list[PlaceCandidate]:
     return candidates[:k]
 
 
+@traced("retrieve_recipes", as_type="retriever")
 def search_recipes(ctx: UserContext, k: int = 5) -> list[RecipeCandidate]:
     """Multimodal recipe search: MiniLM over recipe text fused with CLIP over recipe images."""
     store = get_store()

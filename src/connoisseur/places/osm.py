@@ -10,6 +10,7 @@ import time
 import httpx
 
 from connoisseur.log import get_logger
+from connoisseur.observability import traced
 from connoisseur.places.cache import get_cache, make_key
 from connoisseur.schemas import Coordinates, PlaceCandidate, ResolvedLocation
 from connoisseur.settings import get_settings
@@ -69,6 +70,7 @@ def _to_location(query: str, item: dict) -> ResolvedLocation:
     )
 
 
+@traced("geocode", as_type="tool")
 async def geocode(query: str) -> ResolvedLocation | None:
     """Resolve a free-text place ("El Poblado, Medellín") to coordinates."""
     query = query.strip()[:200]
@@ -87,6 +89,7 @@ async def geocode(query: str) -> ResolvedLocation | None:
     return location
 
 
+@traced("reverse_geocode", as_type="tool")
 async def reverse_geocode(coords: Coordinates) -> ResolvedLocation | None:
     """Turn browser coordinates (already rounded to ~1 km) into a neighbourhood and city."""
     s, cache = get_settings(), get_cache()
@@ -261,6 +264,7 @@ async def _photon_search(center: Coordinates, query: str, radius_m: int,
     return places
 
 
+@traced("find_places", as_type="tool")
 async def find_places(
     center: Coordinates,
     cuisines: list[str] | None = None,

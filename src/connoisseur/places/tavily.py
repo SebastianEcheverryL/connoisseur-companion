@@ -3,6 +3,7 @@ import httpx
 from pydantic import BaseModel
 
 from connoisseur.log import get_logger
+from connoisseur.observability import traced
 from connoisseur.places.cache import get_cache, make_key
 from connoisseur.settings import get_settings
 
@@ -20,6 +21,7 @@ def is_enabled() -> bool:
     return get_settings().tavily_api_key is not None
 
 
+@traced("tavily_search", as_type="tool")
 async def search(
     query: str,
     max_results: int = 5,

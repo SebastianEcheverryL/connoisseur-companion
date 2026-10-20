@@ -1,4 +1,5 @@
 """Typed application settings, read from environment variables and an optional .env file."""
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -10,7 +11,10 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # CONNOISSEUR_ENV_FILE lets tests (and containers) opt out of reading a developer's .env
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("CONNOISSEUR_ENV_FILE", ".env"), env_file_encoding="utf-8", extra="ignore"
+    )
 
     # Runtime
     environment: Literal["dev", "test", "prod"] = "dev"
@@ -77,6 +81,15 @@ class Settings(BaseSettings):
     http_timeout_s: float = 20.0
     cache_dir: Path = Field(default=PROJECT_DIR / ".cache")
     cache_ttl_s: int = 24 * 3600
+
+    # Observability: Langfuse (self-hosted locally with infra/langfuse, Langfuse Cloud in the demo)
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: SecretStr | None = None
+    langfuse_host: str = "http://localhost:3000"
+    langfuse_sample_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Fetch agent prompts from Langfuse Prompt Management (local .md files remain the fallback)
+    langfuse_prompts: bool = False
+    langfuse_prompt_label: str = "production"
 
     # Optional local developer UI mounted on the API
     enable_dev_ui: bool = True

@@ -5,7 +5,9 @@ from typing import Any
 
 from connoisseur.agents.graph import get_graph
 from connoisseur.log import get_logger
+from connoisseur.observability import langchain_callbacks, trace_request
 from connoisseur.schemas import Coordinates
+from connoisseur.settings import get_settings
 
 log = get_logger(__name__)
 
@@ -38,37 +40,58 @@ async def stream_chat(
     message: str,
     history: list[dict] | None = None,
     coords: Coordinates | None = None,
+    *,
+    session_id: str | None = None,
+    user_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Yield `step` events while the graph runs, then one `answer` event."""
+    """Yield `step` events while the graph runs, then one `answer` event (with its trace id)."""
     start = time.perf_counter()
     final: dict[str, Any] = {}
-    async for update in get_graph().astream(initial_state(message, history, coords), stream_mode="updates"):
-        for node, delta in update.items():
-            if node == "experts":
-                continue
-            delta = delta or {}
-            final.update(delta)
-            yield {"type": "step", "node": node, "label": STEP_LABELS.get(node, node)}
+    with trace_request(
+        "chat",
+        input={"message": message, "history_turns": len(history or []), "shared_location": coords is not None},
+        user_id=user_id,
+        session_id=session_id,
+        tags=[get_settings().llm_provider],
+    ) as trace:
+        config = {"callbacks": langchain_callbacks(), "run_name": "recommendation_graph"}
+        async for update in get_graph().astream(
+            initial_state(message, history, coords), config=config, stream_mode="updates"
+        ):
+            for node, delta in update.items():
+                if node == "experts":
+                    continue
+                final.update(delta or {})
+                yield {"type": "step", "node": node, "label": STEP_LABELS.get(node, node)}
 
-    location = final.get("location")
-    context = final.get("context")
-    elapsed = round(time.perf_counter() - start, 2)
-    log.info("chat_done", route=final.get("route"), seconds=elapsed)
-    yield {
-        "type": "answer",
-        "answer": final.get("answer", ""),
-        "cards": final.get("cards", []),
-        "route": final.get("route", []),
-        "intent": context.intent if context else None,
-        "location": location.display_name if location else None,
-        "seconds": elapsed,
-    }
+        location = final.get("location")
+        context = final.get("context")
+        elapsed = round(time.perf_counter() - start, 2)
+        answer = {
+            "type": "answer",
+            "answer": final.get("answer", ""),
+            "cards": final.get("cards", []),
+            "route": final.get("route", []),
+            "intent": context.intent if context else None,
+            "location": location.display_name if location else None,
+            "seconds": elapsed,
+            "trace_id": trace.trace_id,
+        }
+        trace.finish(
+            output={"answer": answer["answer"], "cards": len(answer["cards"])},
+            route=answer["route"],
+            intent=answer["intent"],
+            seconds=elapsed,
+        )
+    log.info("chat_done", route=answer["route"], seconds=elapsed, trace_id=trace.trace_id)
+    yield answer
 
 
-async def run_chat(message: str, history: list[dict] | None = None, coords: Coordinates | None = None) -> dict:
+async def run_chat(message: str, history: list[dict] | None = None, coords: Coordinates | None = None,
+                   **kwargs: Any) -> dict:
     """Non-streaming helper: return only the final answer event."""
     result: dict[str, Any] = {}
-    async for event in stream_chat(message, history, coords):
+    async for event in stream_chat(message, history, coords, **kwargs):
         if event["type"] == "answer":
             result = event
     return result

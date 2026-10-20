@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel
 
 from connoisseur.log import get_logger
+from connoisseur.observability import traced
 from connoisseur.places import tavily
 from connoisseur.schemas import PlaceCandidate
 from connoisseur.settings import get_settings
@@ -115,6 +116,7 @@ async def research_place(place: PlaceCandidate, area: str | None) -> PlaceRating
     return rating_from_snippets(place.name, snippets)
 
 
+@traced("research_ratings", as_type="tool")
 async def enrich_with_ratings(places: list[PlaceCandidate], area: str | None) -> list[PlaceCandidate]:
     """Look up ratings for the top places (in parallel), then re-rank with the rating as a signal."""
     s = get_settings()

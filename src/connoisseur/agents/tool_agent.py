@@ -9,6 +9,7 @@ from connoisseur.agents.prompts import load_prompt
 from connoisseur.agents.state import ChatState
 from connoisseur.llm import get_chat_model, message_text
 from connoisseur.log import get_logger
+from connoisseur.observability import traced
 from connoisseur.server import READ_ONLY_TOOLS, mcp
 from connoisseur.settings import get_settings
 
@@ -24,6 +25,12 @@ def _history_messages(state: ChatState) -> list:
             continue
         messages.append(HumanMessage(content=content) if turn.get("role") == "user" else AIMessage(content=content))
     return messages
+
+
+@traced("mcp_tool_call", as_type="tool")
+async def call_mcp_tool(client: Client, name: str, args: dict) -> str:
+    result = await client.call_tool(name, args, raise_on_error=False)
+    return " ".join(getattr(item, "text", str(item)) for item in result.content) or "(no result)"
 
 
 async def tool_agent(state: ChatState) -> dict:
@@ -54,8 +61,7 @@ async def tool_agent(state: ChatState) -> dict:
                 if call["name"] not in READ_ONLY_TOOLS:
                     output = f"Tool '{call['name']}' is not available."
                 else:
-                    result = await client.call_tool(call["name"], call["args"], raise_on_error=False)
-                    output = " ".join(getattr(item, "text", str(item)) for item in result.content) or "(no result)"
+                    output = await call_mcp_tool(client, call["name"], call["args"])
                 messages.append(ToolMessage(content=output[:MAX_TOOL_OUTPUT_CHARS], tool_call_id=call["id"]))
 
     log.warning("react_step_limit_reached", steps=max_steps)

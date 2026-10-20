@@ -76,7 +76,11 @@ def fakes(monkeypatch):
 
 
 async def run(message="hi", coords=None):
-    return await build_graph().ainvoke(initial_state(message, [], coords))
+    """Run the graph; `route` excludes guardrail steps (covered in test_security.py), `full_route` keeps them."""
+    out = await build_graph().ainvoke(initial_state(message, [], coords))
+    out["full_route"] = out["route"]
+    out["route"] = [r for r in out["route"] if not r.startswith("guard:")]
+    return out
 
 
 async def test_outside_california_goes_to_web_search(fakes):

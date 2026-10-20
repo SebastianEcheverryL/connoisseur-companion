@@ -37,3 +37,6 @@ Thumbs.db
 .chroma/
 .cache/
 infra/langfuse/.env
+
+# promptfoo raw output (the summary goes to docs/security/redteam-report.md)
+redteam/results.json

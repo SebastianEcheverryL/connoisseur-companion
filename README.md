@@ -15,6 +15,7 @@ Everything runs locally with [Ollama](https://ollama.com): no paid LLM API is ne
 - **Multimodal RAG.** MiniLM text embeddings and CLIP image embeddings (ONNX via `fastembed`, no torch) in ChromaDB. Recipes are ranked by a **fusion reranker** that merges text and image similarity per recipe.
 - **Grounded answers.** The recommender may only cite retrieved candidate ids; any invented place is dropped before the answer is shown, and every pick shows its source.
 - **MCP server.** 5 read-only tools and 1 resource, served in-process to the agents and over Streamable HTTP at `/mcp/` for any MCP client.
+- **Agent security.** Input and output guardrails (Llama Prompt Guard 2 + English/Spanish injection rules + Llama Guard 3 locally, Bedrock Guardrails on AWS), untrusted tool and web content screened and isolated, read-only tools, per-user quotas, timeouts and bearer tokens. Threat model in [SECURITY.md](SECURITY.md), adversarial results in the [red-team report](docs/security/redteam-report.md).
 - **Observability with Langfuse.** One trace per request with the LangGraph nodes, every LLM generation (tokens, latency), retrieval, geocoding, OSM, Tavily and MCP tool spans, grouped by session. Prompts can be served from Langfuse Prompt Management, thumbs up/down become scores, and user coordinates, secrets, emails and phone numbers are masked before anything leaves the process.
 - **Production-minded.** Typed settings, provider factory (Ollama / Bedrock), structured logs with request ids, SSE streaming API, HTTP caching and retries for public OSM servers, and a `pytest` suite with the LLM and the network faked.
 
@@ -53,6 +54,7 @@ src/connoisseur/
   agents/             LangGraph graph, nodes, ReAct tool agent, runner, versioned prompts (*.md)
   retrieval/          fastembed embeddings, ChromaDB store, fusion reranker, search service
   places/             OpenStreetMap (Nominatim + Overpass), Tavily, TTL cache
+  security/           guardrails, prompt-injection screening, spotlighting, quotas, PII redaction
   server.py           FastMCP server: 5 read-only tools + culinary map resource
   llm.py              provider factory (Ollama / Bedrock)
   settings.py         typed settings from env vars / .env
@@ -62,6 +64,7 @@ src/connoisseur/
   data_management.py  LLM structuring with a self-repair loop + console CRUD
 scripts/              download_data.py, build_index.py, sync_prompts.py
 infra/langfuse/       docker-compose for a local Langfuse
+redteam/              promptfoo adversarial suite against the running API
 notebooks/            the original step-by-step pipeline, 01 extraction -> 08 chatbot
 tests/                pytest suite
 ```
@@ -71,7 +74,7 @@ tests/                pytest suite
 Requirements: Python 3.12+ and [Ollama](https://ollama.com) running locally.
 
 ```bash
-ollama pull llama3.1 && ollama pull llama3
+ollama pull llama3.1 && ollama pull llama3 && ollama pull llama-guard3:1b
 
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e ".[ui]"                                  # API + developer UI

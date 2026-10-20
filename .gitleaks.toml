@@ -1,0 +1,14 @@
+# Default gitleaks rules plus explicit exceptions for values that are not secrets.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Local-only development credentials and fake keys used in tests"
+regexes = [
+  '''pk-lf-local-dev''',
+  '''sk-lf-local-dev''',
+  '''tvly-abcdefghijklmnop''',
+]
+paths = [
+  '''tests/''',
+]

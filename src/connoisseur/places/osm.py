@@ -161,7 +161,9 @@ def rank_places(places: list[PlaceCandidate], cuisines: list[str], dietary: list
     for place in places:
         score = 0.0
         cuisine = (place.cuisine or "").lower()
-        if wanted_cuisines and any(c in cuisine or cuisine in c for c in wanted_cuisines if cuisine):
+        name = place.name.lower()
+        # Match the cuisine tag, or the name when there is no tag ("Sushi House" for "sushi")
+        if any((cuisine and (c in cuisine or cuisine in c)) or c in name for c in wanted_cuisines):
             score += 2.0
         score += 2.0 * len(wanted_diets & set(place.diet_tags))
         if place.coordinates:
@@ -171,12 +173,29 @@ def rank_places(places: list[PlaceCandidate], cuisines: list[str], dietary: list
 
 
 RETRYABLE_STATUS = {429, 502, 503, 504}
+OVERPASS_COOLDOWN_S = 300
+_overpass_down_until = 0.0
 
 
 async def _overpass_fetch(query: str, attempts_per_server: int = 2) -> list[dict] | None:
-    """POST the query to each configured Overpass server, backing off on overload responses."""
+    """POST the query to each Overpass server, backing off on overload responses.
+
+    Circuit breaker: after every server fails, skip Overpass for a few minutes instead of making
+    each user wait for the same timeouts again.
+    """
+    global _overpass_down_until
+    if time.monotonic() < _overpass_down_until:
+        log.info("overpass_skipped", reason="circuit open")
+        return None
+    elements = await _overpass_try_servers(query, attempts_per_server)
+    if elements is None:
+        _overpass_down_until = time.monotonic() + OVERPASS_COOLDOWN_S
+    return elements
+
+
+async def _overpass_try_servers(query: str, attempts_per_server: int) -> list[dict] | None:
     s = get_settings()
-    async with httpx.AsyncClient(timeout=s.http_timeout_s, headers=_headers()) as client:
+    async with httpx.AsyncClient(timeout=s.overpass_timeout_s, headers=_headers()) as client:
         for url in s.overpass_urls:
             for attempt in range(attempts_per_server):
                 try:
@@ -193,6 +212,55 @@ async def _overpass_fetch(query: str, attempts_per_server: int = 2) -> list[dict
     return None
 
 
+PHOTON_TAGS = ("amenity:restaurant", "amenity:cafe", "amenity:fast_food")
+PHOTON_OSM_TYPES = {"N": "node", "W": "way", "R": "relation"}
+
+
+def photon_feature_to_candidate(feature: dict, fallback_area: str | None) -> PlaceCandidate | None:
+    props = feature.get("properties") or {}
+    coords = (feature.get("geometry") or {}).get("coordinates") or []
+    if not props.get("name") or len(coords) != 2:
+        return None
+    osm_ref = f"{PHOTON_OSM_TYPES.get(props.get('osm_type'), 'node')}/{props.get('osm_id')}"
+    street = " ".join(filter(None, [props.get("street"), props.get("housenumber")]))
+    area = props.get("district") or props.get("city") or fallback_area
+    return PlaceCandidate(
+        id=f"osm:{osm_ref}",
+        name=props["name"],
+        source="osm",
+        location=", ".join(filter(None, [street, area])) or None,
+        description=props.get("osm_value", "restaurant").replace("_", " "),
+        coordinates=Coordinates(lat=coords[1], lon=coords[0]),
+        url=f"https://www.openstreetmap.org/{osm_ref}",
+    )
+
+
+async def _photon_search(center: Coordinates, query: str, radius_m: int,
+                         area_name: str | None) -> list[PlaceCandidate] | None:
+    """Name search biased to `center`. It has no cuisine tags, so the query carries the cuisine."""
+    s = get_settings()
+    params = [("q", query[:100]), ("lat", center.lat), ("lon", center.lon), ("limit", 25)]
+    params += [("osm_tag", tag) for tag in PHOTON_TAGS]
+    try:
+        async with httpx.AsyncClient(timeout=s.http_timeout_s, headers=_headers()) as client:
+            resp = await client.get(s.photon_url, params=params)
+            resp.raise_for_status()
+            features = resp.json().get("features", [])
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("photon_error", error_type=type(exc).__name__, error=str(exc))
+        return None
+
+    places, seen = [], set()
+    for feature in features:
+        place = photon_feature_to_candidate(feature, area_name)
+        # Location bias is not a filter: drop matches from other cities
+        if place is None or haversine_m(center, place.coordinates) > radius_m * 3 or place.id in seen:
+            continue
+        seen.add(place.id)
+        places.append(place)
+    return places
+
+
 async def find_places(
     center: Coordinates,
     cuisines: list[str] | None = None,
@@ -200,20 +268,38 @@ async def find_places(
     radius_m: int | None = None,
     area_name: str | None = None,
     limit: int | None = None,
+    query: str | None = None,
 ) -> list[PlaceCandidate]:
-    """Restaurants, cafés and fast-food places with a name within `radius_m` of `center`."""
+    """Restaurants, cafés and fast-food places with a name within `radius_m` of `center`.
+
+    Overpass is the primary source (it has cuisine and diet tags). When every Overpass server is
+    busy, Photon searches by name around the same point, using `query` (or the cuisines).
+    """
     s, cache = get_settings(), get_cache()
     radius_m = min(radius_m or s.web_search_radius_m, 10_000)
     limit = limit or s.web_max_places
+    cuisines, dietary = cuisines or [], dietary or []
     center = center.rounded(3)  # ~100 m: improves cache hits without losing relevance
     key = make_key("overpass", {"c": center.model_dump(), "r": radius_m})
 
     elements = cache.get(key)
     if elements is None:
         elements = await _overpass_fetch(_overpass_query(center, radius_m, 80))
-        if elements is None:
-            return []
-        cache.set(key, elements, s.cache_ttl_s)
+        if elements is not None:
+            cache.set(key, elements, s.cache_ttl_s)
 
-    places = [p for e in elements if (p := element_to_candidate(e, center, area_name))]
-    return rank_places(places, cuisines or [], dietary or [], center, radius_m)[:limit]
+    if elements is not None:
+        places = [p for e in elements if (p := element_to_candidate(e, center, area_name))]
+    else:
+        search = " ".join([*cuisines, *dietary]) or query or "restaurant"
+        photon_key = make_key("photon", {"c": center.model_dump(), "q": search.lower()})
+        cached = cache.get(photon_key)
+        if cached is not None:
+            places = [PlaceCandidate.model_validate(p) for p in cached]
+        else:
+            places = await _photon_search(center, search, radius_m, area_name)
+            if places is None:
+                return []
+            cache.set(photon_key, [p.model_dump() for p in places], s.cache_ttl_s)
+        log.info("places_fallback_photon", query=search, results=len(places))
+    return rank_places(places, cuisines, dietary, center, radius_m)[:limit]

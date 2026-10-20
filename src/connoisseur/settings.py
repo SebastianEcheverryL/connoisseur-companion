@@ -53,6 +53,9 @@ class Settings(BaseSettings):
         "https://overpass.private.coffee/api/interpreter",
         "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     ]
+    overpass_timeout_s: float = 12.0
+    # Fallback when every Overpass server is busy: Komoot's free OSM search with location bias
+    photon_url: str = "https://photon.komoot.io/api/"
     # Nominatim's usage policy requires an identifying User-Agent: set OSM_USER_AGENT with a contact URL
     osm_user_agent: str = "connoisseur-companion/0.2 (portfolio demo)"
     tavily_api_key: SecretStr | None = None

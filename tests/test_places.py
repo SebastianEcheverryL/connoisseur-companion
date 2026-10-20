@@ -33,6 +33,7 @@ OVERPASS = {
 @pytest.fixture(autouse=True)
 def no_throttle(monkeypatch):
     monkeypatch.setattr(osm, "_last_nominatim_call", 0.0)
+    monkeypatch.setattr(osm, "_overpass_down_until", 0.0)
 
 
 @respx.mock
@@ -78,3 +79,47 @@ async def test_find_places_falls_back_to_next_server_when_busy():
 async def test_tavily_disabled_without_key():
     assert not tavily.is_enabled()
     assert await tavily.search("vegan medellin") == []
+
+
+PHOTON = {
+    "features": [
+        {"geometry": {"coordinates": [-75.5815, 6.2445]},
+         "properties": {"name": "Sushi House", "osm_type": "N", "osm_id": 10, "osm_value": "restaurant",
+                        "district": "Laureles-Estadio", "city": "Medellín"}},
+        {"geometry": {"coordinates": [-74.1, 4.6]},  # Bogotá: outside the radius, must be dropped
+         "properties": {"name": "Sushi Far", "osm_type": "N", "osm_id": 11, "osm_value": "restaurant"}},
+        {"geometry": {"coordinates": [-75.58, 6.245]},
+         "properties": {"name": "Café Central", "osm_type": "W", "osm_id": 12, "osm_value": "cafe"}},
+    ]
+}
+
+
+@respx.mock
+async def test_find_places_falls_back_to_photon_when_overpass_is_down():
+    for url in get_settings().overpass_urls:
+        respx.post(url).mock(side_effect=httpx.ReadTimeout("slow"))
+    photon = respx.get(get_settings().photon_url).mock(return_value=httpx.Response(200, json=PHOTON))
+    places = await osm.find_places(Coordinates(lat=6.2442, lon=-75.5812), cuisines=["sushi"])
+    assert photon.called
+    assert photon.calls[0].request.url.params["q"] == "sushi"
+    assert [p.name for p in places] == ["Sushi House", "Café Central"]  # name match ranks first
+    assert places[0].id == "osm:node/10"
+    assert places[1].url == "https://www.openstreetmap.org/way/12"
+
+
+@respx.mock
+async def test_find_places_returns_empty_when_every_source_fails():
+    for url in get_settings().overpass_urls:
+        respx.post(url).mock(return_value=httpx.Response(504))
+    respx.get(get_settings().photon_url).mock(return_value=httpx.Response(500))
+    assert await osm.find_places(Coordinates(lat=6.2, lon=-75.5)) == []
+
+
+@respx.mock
+async def test_overpass_circuit_breaker_skips_servers_after_failure():
+    routes = [respx.post(url).mock(return_value=httpx.Response(504)) for url in get_settings().overpass_urls]
+    respx.get(get_settings().photon_url).mock(return_value=httpx.Response(200, json=PHOTON))
+    await osm.find_places(Coordinates(lat=6.2442, lon=-75.5812), cuisines=["sushi"])
+    calls_after_first = sum(r.call_count for r in routes)
+    await osm.find_places(Coordinates(lat=6.25, lon=-75.59), cuisines=["sushi"])
+    assert sum(r.call_count for r in routes) == calls_after_first  # second search went straight to Photon

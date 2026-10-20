@@ -32,3 +32,7 @@ chroma_db/
 Thumbs.db
 .vscode/
 .idea/
+
+# Local vector index and HTTP cache
+.chroma/
+.cache/

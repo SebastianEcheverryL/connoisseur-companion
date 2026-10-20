@@ -1,15 +1,22 @@
-"""Shared paths and settings, overridable through environment variables."""
-import os
-from pathlib import Path
+"""Backwards-compatible module-level constants. New code should use `connoisseur.settings.get_settings()`."""
+from connoisseur.settings import PROJECT_DIR, get_settings
 
-PROJECT_DIR = Path(__file__).resolve().parents[2]
-DATA_DIR = Path(os.environ.get("CONNOISSEUR_DATA_DIR", PROJECT_DIR / "data"))
+_settings = get_settings()
 
-RESTAURANT_DATA_PATH = DATA_DIR / "structured_restaurant_data.json"
-REVIEW_DATA_PATH = DATA_DIR / "augmented_user_review.json"
-# Raw IBM text, fetched by scripts/download_data.py (not redistributed with the repo)
-CULINARY_MAP_PATH = DATA_DIR / "California-Culinary-Map.txt"
+DATA_DIR = _settings.data_dir
+RESTAURANT_DATA_PATH = _settings.restaurant_data_path
+REVIEW_DATA_PATH = _settings.review_data_path
+CULINARY_MAP_PATH = _settings.culinary_map_path
 
-CHAT_MODEL = os.environ.get("CHAT_MODEL", "llama3.1")
-EXTRACTION_MODEL = os.environ.get("EXTRACTION_MODEL", "llama3")
-SAMPLING_MODEL = os.environ.get("SAMPLING_MODEL", "claude-sonnet-4-20250514")
+CHAT_MODEL = _settings.chat_model
+EXTRACTION_MODEL = _settings.extraction_model
+
+__all__ = [
+    "CHAT_MODEL",
+    "CULINARY_MAP_PATH",
+    "DATA_DIR",
+    "EXTRACTION_MODEL",
+    "PROJECT_DIR",
+    "RESTAURANT_DATA_PATH",
+    "REVIEW_DATA_PATH",
+]

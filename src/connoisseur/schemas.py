@@ -22,6 +22,7 @@ class UserContext(BaseModel):
     intent: Intent = "clarification"
     language: str = Field(default="English", description="Language the user writes in, e.g. Spanish")
     location: str | None = Field(default=None, description="City or neighbourhood mentioned by the user")
+    near_me: bool = Field(default=False, description="User wants places near their current position")
     cuisines: list[str] = Field(default_factory=list)
     dietary: list[str] = Field(default_factory=list, description="e.g. vegan, gluten-free, halal")
     vibe: str | None = Field(default=None, description="Atmosphere, e.g. moody, romantic, quiet")
@@ -38,6 +39,7 @@ class ProfileExtraction(BaseModel):
     intent: Intent
     language: str
     location: str | None
+    near_me: bool
     cuisines: list[str]
     dietary: list[str]
     vibe: str | None

@@ -2,6 +2,7 @@
 
 Run locally:  uvicorn connoisseur.api:app --reload   (dev UI at /ui, MCP at /mcp/)
 """
+import hmac
 import json
 import time
 import uuid
@@ -10,8 +11,8 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 import structlog
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from connoisseur import __version__, observability
@@ -19,6 +20,7 @@ from connoisseur.agents.runner import run_chat, stream_chat
 from connoisseur.log import configure_logging, get_logger
 from connoisseur.retrieval.store import get_store
 from connoisseur.schemas import Coordinates
+from connoisseur.security.quota import get_quota_service
 from connoisseur.server import mcp
 from connoisseur.settings import get_settings
 
@@ -56,6 +58,50 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Connoisseur Companion API", version=__version__, lifespan=lifespan)
 app.mount("/mcp", mcp_app)
+
+
+def _token_ok(header: str | None, expected) -> bool:
+    """Constant-time check of an `Authorization: Bearer <token>` header against a SecretStr (None = open)."""
+    if expected is None:
+        return True
+    scheme, _, token = (header or "").partition(" ")
+    return scheme.lower() == "bearer" and hmac.compare_digest(token.encode(), expected.get_secret_value().encode())
+
+
+@app.middleware("http")
+async def mcp_auth(request: Request, call_next):
+    """/mcp is open to any MCP client on the internet once deployed, so it requires MCP_TOKEN when set."""
+    if request.url.path.startswith("/mcp") and not _token_ok(request.headers.get("authorization"),
+                                                            get_settings().mcp_token):
+        return JSONResponse({"detail": "Invalid or missing MCP token"}, status_code=401,
+                            headers={"WWW-Authenticate": "Bearer"})
+    return await call_next(request)
+
+
+def require_api_key(request: Request) -> None:
+    if not _token_ok(request.headers.get("authorization"), get_settings().api_key):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key",
+                            headers={"WWW-Authenticate": "Bearer"})
+
+
+def user_key(request: Request) -> str:
+    """Who to count quota against. The trusted Vercel BFF will send the signed-in user id
+    (X-User-Id is only honoured when API_KEY is set, i.e. when the caller is authenticated);
+    otherwise fall back to the client IP."""
+    if get_settings().api_key is not None and request.headers.get("x-user-id"):
+        return "user:" + request.headers["x-user-id"][:64]
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return "ip:" + (forwarded or (request.client.host if request.client else "unknown"))
+
+
+def enforce_quota(request: Request) -> str:
+    key = user_key(request)
+    decision = get_quota_service().consume(key)
+    if not decision.allowed:
+        log.warning("quota_exceeded", reason=decision.reason, user=key)
+        raise HTTPException(status_code=429, detail=decision.reason,
+                            headers={"Retry-After": str(decision.retry_after_s)})
+    return key
 
 
 @app.middleware("http")
@@ -99,8 +145,8 @@ async def _sse(req: ChatRequest) -> AsyncIterator[str]:
     yield "event: done\ndata: {}\n\n"
 
 
-@app.post("/chat")
-async def chat(req: ChatRequest):
+@app.post("/chat", dependencies=[Depends(require_api_key)])
+async def chat(req: ChatRequest, _: str = Depends(enforce_quota)):
     """Stream progress (`step`) and the final `answer` as server-sent events."""
     if req.session_id:
         structlog.contextvars.bind_contextvars(session_id=req.session_id)
@@ -108,13 +154,13 @@ async def chat(req: ChatRequest):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@app.post("/chat/sync")
-async def chat_sync(req: ChatRequest) -> dict:
+@app.post("/chat/sync", dependencies=[Depends(require_api_key)])
+async def chat_sync(req: ChatRequest, _: str = Depends(enforce_quota)) -> dict:
     """Same as /chat but returns only the final answer as JSON (handy for scripts and evals)."""
     return await run_chat(req.message, _history(req), req.location, session_id=req.session_id)
 
 
-@app.post("/feedback")
+@app.post("/feedback", dependencies=[Depends(require_api_key)])
 def feedback(req: FeedbackRequest) -> dict:
     """Thumbs up/down from the UI, stored as a `user_feedback` score on the answer's trace."""
     if not observability.score(req.trace_id, "user_feedback", float(req.value), comment=req.comment,

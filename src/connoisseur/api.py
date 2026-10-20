@@ -6,14 +6,15 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Literal
 
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from connoisseur import __version__
+from connoisseur import __version__, observability
 from connoisseur.agents.runner import run_chat, stream_chat
 from connoisseur.log import configure_logging, get_logger
 from connoisseur.retrieval.store import get_store
@@ -34,11 +35,26 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     history: list[ChatTurn] = Field(default_factory=list, max_length=20)
     location: Coordinates | None = Field(default=None, description="Optional browser geolocation")
-    session_id: str | None = Field(default=None, max_length=64)
+    session_id: str | None = Field(default=None, max_length=64, pattern=r"^[\w-]+$")
+
+
+class FeedbackRequest(BaseModel):
+    trace_id: str = Field(pattern=r"^[0-9a-f]{32}$", description="trace_id returned with the answer")
+    value: Literal[0, 1] = Field(description="1 = helpful, 0 = not helpful")
+    comment: str | None = Field(default=None, max_length=1000)
 
 
 mcp_app = mcp.http_app(path="/", stateless_http=True)
-app = FastAPI(title="Connoisseur Companion API", version=__version__, lifespan=mcp_app.lifespan)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with mcp_app.lifespan(app):
+        yield
+    observability.flush()  # do not lose the last traces on shutdown
+
+
+app = FastAPI(title="Connoisseur Companion API", version=__version__, lifespan=lifespan)
 app.mount("/mcp", mcp_app)
 
 
@@ -64,6 +80,7 @@ def health() -> dict:
         "version": __version__,
         "llm_provider": s.llm_provider,
         "vector_index": store is not None,
+        "tracing": observability.is_enabled(),
     }
 
 
@@ -73,7 +90,7 @@ def _history(req: ChatRequest) -> list[dict]:
 
 async def _sse(req: ChatRequest) -> AsyncIterator[str]:
     try:
-        async for event in stream_chat(req.message, _history(req), req.location):
+        async for event in stream_chat(req.message, _history(req), req.location, session_id=req.session_id):
             yield f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
     except Exception:  # report the failure to the client instead of cutting the stream
         log.exception("chat_failed")
@@ -94,7 +111,16 @@ async def chat(req: ChatRequest):
 @app.post("/chat/sync")
 async def chat_sync(req: ChatRequest) -> dict:
     """Same as /chat but returns only the final answer as JSON (handy for scripts and evals)."""
-    return await run_chat(req.message, _history(req), req.location)
+    return await run_chat(req.message, _history(req), req.location, session_id=req.session_id)
+
+
+@app.post("/feedback")
+def feedback(req: FeedbackRequest) -> dict:
+    """Thumbs up/down from the UI, stored as a `user_feedback` score on the answer's trace."""
+    if not observability.score(req.trace_id, "user_feedback", float(req.value), comment=req.comment,
+                               data_type="BOOLEAN"):
+        raise HTTPException(status_code=503, detail="Tracing is not configured.")
+    return {"status": "recorded"}
 
 
 def _mount_dev_ui() -> None:

@@ -5,11 +5,13 @@ Inside API:   uvicorn connoisseur.api:app  ->  http://localhost:8000/ui
 """
 import argparse
 import os
+import uuid
 
 os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")  # no telemetry from the dev UI
 
 import gradio as gr
 
+from connoisseur import observability
 from connoisseur.agents.runner import stream_chat
 from connoisseur.schemas import Coordinates
 
@@ -44,10 +46,11 @@ def parse_coords(text: str | None) -> Coordinates | None:
         return None
 
 
-async def handle_chat(user_message, history, shared_location=None):
+async def handle_chat(user_message, history, shared_location=None, session_id=None, trace_ids=None):
     history = history or []
+    trace_ids = dict(trace_ids or {})
     if not user_message or not user_message.strip():
-        yield history, ""
+        yield history, "", trace_ids
         return
 
     previous = [{"role": m["role"], "content": m["content"]} for m in history
@@ -56,17 +59,27 @@ async def handle_chat(user_message, history, shared_location=None):
         {"role": "user", "content": user_message},
         {"role": "assistant", "content": "_Thinking..._"},
     ]
-    yield history, ""
+    yield history, "", trace_ids
 
     steps: list[str] = []
-    async for event in stream_chat(user_message, previous, parse_coords(shared_location)):
+    async for event in stream_chat(user_message, previous, parse_coords(shared_location), session_id=session_id):
         if event["type"] == "step":
             steps.append(event["label"])
             history[-1] = {"role": "assistant", "content": "_" + " → ".join(steps) + "..._"}
         elif event["type"] == "answer":
             footer = f"\n\n<sub>route: {' · '.join(event['route'])} · {event['seconds']}s</sub>"
             history[-1] = {"role": "assistant", "content": (event["answer"] or "(no answer)") + footer}
-        yield history, ""
+            if event.get("trace_id"):
+                trace_ids[len(history) - 1] = event["trace_id"]  # message index -> trace, for feedback
+        yield history, "", trace_ids
+
+
+def handle_feedback(data: gr.LikeData, trace_ids):
+    """Send the 👍/👎 on an answer to Langfuse as a `user_feedback` score on that answer's trace."""
+    index = data.index[0] if isinstance(data.index, list | tuple) else data.index
+    trace_id = (trace_ids or {}).get(index)
+    if trace_id and data.liked in (True, False):
+        observability.score(trace_id, "user_feedback", 1.0 if data.liked else 0.0, data_type="BOOLEAN")
 
 
 def build_demo() -> gr.Blocks:
@@ -76,7 +89,9 @@ def build_demo() -> gr.Blocks:
             "Restaurants anywhere (California guide + OpenStreetMap), recipes and reviews. "
             "Tell me where you are and what you feel like eating."
         )
-        chatbot = gr.Chatbot(height=520)
+        session_id = gr.State(lambda: uuid.uuid4().hex)  # one Langfuse session per browser tab
+        trace_ids = gr.State({})
+        chatbot = gr.Chatbot(height=520, feedback_options=("Like", "Dislike"))
         msg_input = gr.Textbox(label="Your message", placeholder=EXAMPLES[0])
         with gr.Row():
             location_box = gr.Textbox(
@@ -90,7 +105,9 @@ def build_demo() -> gr.Blocks:
         gr.Examples(EXAMPLES, inputs=msg_input)
         locate_btn.click(None, None, location_box, js=GEOLOCATION_JS)
         clear_btn.click(lambda: "", None, location_box)
-        msg_input.submit(handle_chat, [msg_input, chatbot, location_box], [chatbot, msg_input])
+        msg_input.submit(handle_chat, [msg_input, chatbot, location_box, session_id, trace_ids],
+                         [chatbot, msg_input, trace_ids])
+        chatbot.like(handle_feedback, [trace_ids], None)
     return demo
 
 

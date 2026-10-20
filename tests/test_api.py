@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from connoisseur import api
 
 
-async def fake_stream(message, history=None, coords=None):
+async def fake_stream(message, history=None, coords=None, **kwargs):
     yield {"type": "step", "node": "profile", "label": "Understanding your request"}
     yield {"type": "answer", "answer": f"echo: {message}", "cards": [], "route": ["intent:test"],
            "coords": coords.model_dump() if coords else None}
@@ -67,3 +67,39 @@ def test_mcp_endpoint_lists_tools(client):
     )
     assert resp.status_code == 200
     assert "search_nearby_restaurants" in resp.text
+
+
+TRACE_ID = "0" * 31 + "1"
+
+
+def test_feedback_requires_tracing(client):
+    resp = client.post("/feedback", json={"trace_id": TRACE_ID, "value": 1})
+    assert resp.status_code == 503
+
+
+def test_feedback_records_score(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(api.observability, "score", lambda *a, **kw: calls.append((a, kw)) or True)
+    resp = client.post("/feedback", json={"trace_id": TRACE_ID, "value": 0, "comment": "wrong city"})
+    assert resp.json() == {"status": "recorded"}
+    args, kwargs = calls[0]
+    assert args == (TRACE_ID, "user_feedback", 0.0)
+    assert kwargs["comment"] == "wrong city"
+
+
+@pytest.mark.parametrize("body", [{"trace_id": "not-a-trace", "value": 1}, {"trace_id": TRACE_ID, "value": 5}])
+def test_feedback_validates_input(client, body):
+    assert client.post("/feedback", json=body).status_code == 422
+
+
+def test_session_id_is_forwarded(client, monkeypatch):
+    seen = {}
+
+    async def capture(message, history=None, coords=None, **kwargs):
+        seen.update(kwargs)
+        yield {"type": "answer", "answer": "ok"}
+
+    monkeypatch.setattr(api, "stream_chat", capture)
+    client.post("/chat", json={"message": "hi", "session_id": "abc-123"})
+    assert seen["session_id"] == "abc-123"
+    assert client.post("/chat", json={"message": "hi", "session_id": "bad id!"}).status_code == 422

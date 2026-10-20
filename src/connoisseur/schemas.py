@@ -74,6 +74,10 @@ class PlaceCandidate(BaseModel):
     location: str | None = None
     cuisine: str | None = None
     rating: float | None = None
+    rating_source: str | None = Field(default=None, description="Site(s) the rating came from, for web places")
+    review_count: int | None = None
+    review_url: str | None = None
+    review_snippet: str | None = None
     price_range: int | None = None
     vibe: str | None = None
     description: str | None = None

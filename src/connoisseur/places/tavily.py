@@ -20,18 +20,25 @@ def is_enabled() -> bool:
     return get_settings().tavily_api_key is not None
 
 
-async def search(query: str, max_results: int = 5) -> list[WebSnippet]:
+async def search(
+    query: str,
+    max_results: int = 5,
+    include_domains: list[str] | None = None,
+    ttl_s: int | None = None,
+) -> list[WebSnippet]:
     """Run one basic Tavily search. Returns [] when no API key is configured or the call fails."""
     s = get_settings()
     if s.tavily_api_key is None:
         return []
     query = query.strip()[:300]
     cache = get_cache()
-    key = make_key("tavily", {"q": query.lower(), "n": max_results})
+    key = make_key("tavily", {"q": query.lower(), "n": max_results, "d": include_domains or []})
     if (hit := cache.get(key)) is not None:
         return [WebSnippet.model_validate(x) for x in hit]
 
     payload = {"query": query, "search_depth": "basic", "max_results": max_results, "include_answer": False}
+    if include_domains:
+        payload["include_domains"] = include_domains
     headers = {"Authorization": f"Bearer {s.tavily_api_key.get_secret_value()}"}
     try:
         async with httpx.AsyncClient(timeout=s.http_timeout_s) as client:
@@ -51,5 +58,5 @@ async def search(query: str, max_results: int = 5) -> list[WebSnippet]:
         for r in results
         if r.get("url")
     ]
-    cache.set(key, [x.model_dump() for x in snippets], s.cache_ttl_s)
+    cache.set(key, [x.model_dump() for x in snippets], ttl_s or s.cache_ttl_s)
     return snippets

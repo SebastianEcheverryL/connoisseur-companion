@@ -60,6 +60,18 @@ class Settings(BaseSettings):
     osm_user_agent: str = "connoisseur-companion/0.2 (portfolio demo)"
     tavily_api_key: SecretStr | None = None
     tavily_url: str = "https://api.tavily.com/search"
+    # Ratings research: one Tavily search per top OSM place, cached for a week
+    rating_lookups: int = 3
+    rating_cache_ttl_s: int = 7 * 24 * 3600
+    rating_domains: list[str] = [
+        "tripadvisor.com",
+        "tripadvisor.com.co",
+        "tripadvisor.com.mx",
+        "tripadvisor.es",
+        "restaurantguru.com",
+        "yelp.com",
+        "foursquare.com",
+    ]
     web_search_radius_m: int = 2000
     web_max_places: int = 8
     http_timeout_s: float = 20.0

@@ -1,11 +1,11 @@
-"""MCP client demo: tool calls, sampling (delegated to Claude) and roots."""
+"""MCP client demo: tool calls, sampling (served by the configured local/Bedrock LLM) and roots."""
 import asyncio
 import json
 import os
 import sys
 from pathlib import Path
 
-from anthropic import Anthropic
+from langchain_core.messages import HumanMessage
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import (
@@ -15,7 +15,9 @@ from mcp.types import (
     TextContent,
 )
 
-from connoisseur.config import PROJECT_DIR, SAMPLING_MODEL
+from connoisseur.config import PROJECT_DIR
+from connoisseur.llm import get_chat_model, message_text
+from connoisseur.settings import get_settings
 
 SERVER_SCRIPT = str(Path(__file__).parent / "server.py")
 
@@ -26,20 +28,10 @@ server_params = StdioServerParameters(
     env={**os.environ, "PYTHONPATH": str(PROJECT_DIR / "src")},
 )
 
-_anthropic_client: Anthropic | None = None
 
-
-def get_anthropic_client() -> Anthropic:
-    """Create the Anthropic client lazily so the module imports without an API key."""
-    global _anthropic_client
-    if _anthropic_client is None:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            raise RuntimeError(
-                "ANTHROPIC_API_KEY is not set. It is only needed when the server "
-                "requests LLM sampling; copy .env.example to .env and set it."
-            )
-        _anthropic_client = Anthropic()
-    return _anthropic_client
+def _sampling_model_name() -> str:
+    s = get_settings()
+    return s.bedrock_model_id if s.llm_provider == "bedrock" else s.chat_model
 
 
 # ROOTS - tell the server which directories it can access
@@ -50,25 +42,21 @@ def list_roots() -> list[Root]:
 
 # SAMPLING - handle LLM requests delegated from the server
 async def handle_sampling(params: CreateMessageRequestParams) -> CreateMessageResult:
-    """Run a Claude call on behalf of the server and return the result."""
+    """Run an LLM call on behalf of the server (no paid API: Ollama locally, Bedrock on AWS)."""
     prompt = params.messages[0].content.text
 
     print("\n[Sampling] Server requested LLM task:")
     print(f"  Prompt preview: {prompt[:150]}...")
 
-    response = get_anthropic_client().messages.create(
-        model=SAMPLING_MODEL,
-        max_tokens=params.maxTokens or 200,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    response_text = response.content[0].text
+    model = get_chat_model(max_tokens=params.maxTokens or 200)
+    response = await model.ainvoke([HumanMessage(content=prompt)])
+    response_text = message_text(response.content)
     print(f"  LLM Response: {response_text[:100]}...")
 
     return CreateMessageResult(
         role="assistant",
         content=TextContent(type="text", text=response_text),
-        model=SAMPLING_MODEL,
+        model=_sampling_model_name(),
     )
 
 

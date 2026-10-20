@@ -16,6 +16,7 @@ jobs:
           cache: pip
       - run: pip install -e ".[dev]"
       - run: ruff check src tests scripts
+      # LLM and web calls are faked; tests that need the built vector index are skipped
       - run: pytest -q
       - name: Notebooks must be committed without outputs
         run: nbstripout --verify notebooks/*.ipynb

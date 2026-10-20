@@ -91,6 +91,32 @@ class Settings(BaseSettings):
     langfuse_prompts: bool = False
     langfuse_prompt_label: str = "production"
 
+    # Guardrails: "local" (Llama Guard via Ollama + Prompt Guard ONNX), "bedrock" (Bedrock Guardrails) or "none"
+    guardrail_provider: Literal["local", "bedrock", "none"] = "local"
+    # When a guardrail model is unavailable: True = block (safe default in prod), False = allow and log
+    guardrail_fail_closed: bool = False
+    prompt_guard_repo: str = "gravitee-io/Llama-Prompt-Guard-2-22M-onnx"
+    prompt_guard_file: str = "model.quant.onnx"
+    prompt_injection_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
+    llama_guard_model: str = "llama-guard3:1b"
+    # Llama Guard hazard categories that do NOT block. S6 (specialised advice) covers allergy/diet questions.
+    # S7 (privacy) is allowed on input only: asking a restaurant's phone or address was flagged by the 1B model,
+    # and the agent holds no data about private people; answers are still checked for S7.
+    llama_guard_allowed_input_categories: list[str] = ["S6", "S7"]
+    llama_guard_allowed_output_categories: list[str] = ["S6"]
+    bedrock_guardrail_id: str | None = None
+    bedrock_guardrail_version: str = "DRAFT"
+
+    # Abuse and cost controls
+    tool_timeout_s: float = 30.0
+    request_timeout_s: float = 240.0
+    daily_message_limit: int = 50
+    per_minute_message_limit: int = 8
+    # Optional shared secrets. API_KEY protects /chat and /feedback (the Vercel BFF will hold it);
+    # MCP_TOKEN protects /mcp. Empty = open, for local development only.
+    api_key: SecretStr | None = None
+    mcp_token: SecretStr | None = None
+
     # Optional local developer UI mounted on the API
     enable_dev_ui: bool = True
 

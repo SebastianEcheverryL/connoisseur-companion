@@ -10,7 +10,6 @@ Sensitive data is masked before it leaves the process (see `mask_sensitive`).
 """
 import functools
 import inspect
-import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -19,6 +18,7 @@ from typing import Any
 
 from connoisseur import __version__
 from connoisseur.log import get_logger
+from connoisseur.security.pii import redact
 from connoisseur.settings import get_settings
 
 log = get_logger(__name__)
@@ -27,32 +27,10 @@ REDACTED = "[redacted]"
 # Keys whose values must never reach the tracing backend. Any lat/lon is dropped: a user's position
 # can hide inside a geocoding input or output, and place coordinates add nothing to a trace.
 SENSITIVE_KEYS = {"coords", "lat", "lon", "api_key", "authorization", "password", "secret", "tavily_api_key"}
-EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
-PHONE_CANDIDATE_RE = re.compile(r"(?<![\w.])\+?\d[\d\s().-]{8,}\d(?![\w.])")
-DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-COORDS_RE = re.compile(r"-?\d{1,2}\.\d{2,}\s*,\s*-?\d{1,3}\.\d{2,}")
-SECRET_RE = re.compile(r"\b(?:tvly-|sk-lf-|pk-lf-|AKIA)[\w-]{8,}")
-
-
-def _mask_text(text: str) -> str:
-    text = SECRET_RE.sub(REDACTED, text)
-    text = EMAIL_RE.sub("[email]", text)
-    text = COORDS_RE.sub("[coords]", text)
-    return PHONE_CANDIDATE_RE.sub(_phone_or_keep, text)
-
-
-def _phone_or_keep(match: re.Match) -> str:
-    """Treat a digit run as a phone number only if it has 10+ digits and is not a date."""
-    candidate = match.group(0)
-    if DATE_RE.search(candidate) or sum(ch.isdigit() for ch in candidate) < 10:
-        return candidate
-    return "[phone]"
-
-
 def mask_sensitive(data: Any = None, **_: Any) -> Any:
     """Recursively redact user coordinates, secrets, emails and phone numbers."""
     if isinstance(data, str):
-        return _mask_text(data)
+        return redact(data)
     if isinstance(data, dict):
         return {k: REDACTED if str(k).lower() in SENSITIVE_KEYS else mask_sensitive(v) for k, v in data.items()}
     if isinstance(data, list | tuple):

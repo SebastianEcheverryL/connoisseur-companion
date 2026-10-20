@@ -219,3 +219,21 @@ async def test_unknown_place_asks_to_rephrase(fakes):
     out = await run()
     assert out["route"][-1] == "ask_location"
     assert "Atlantisville" in out["answer"]
+
+
+async def test_web_places_show_researched_rating_with_source(fakes, monkeypatch):
+    from connoisseur.places import ratings, tavily
+
+    async def enrich(places, area):
+        places[0].rating, places[0].rating_source = 4.6, "Tripadvisor"
+        places[0].review_url, places[0].review_count = "https://tripadvisor.com/x", 1234
+        places[0].review_snippet = "Great vegan bowls"
+        return places
+
+    monkeypatch.setattr(tavily, "is_enabled", lambda: True)
+    monkeypatch.setattr(ratings, "enrich_with_ratings", enrich)
+    fakes["profile"] = profile("restaurant", location="El Poblado, Medellín")
+    fakes["geocode"] = resolved("Antioquia")
+    out = await run()
+    assert out["route"][-2:] == ["web", "ratings"]
+    assert "⭐ 4.6/5 [Tripadvisor](https://tripadvisor.com/x), 1,234 reviews" in out["answer"]

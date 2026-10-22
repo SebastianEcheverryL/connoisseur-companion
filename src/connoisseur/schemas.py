@@ -1,0 +1,107 @@
+"""Typed contracts shared by the agents, the retrieval layer, the web tools and the API."""
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+Intent = Literal["restaurant", "recipe", "both", "lookup", "clarification", "out_of_scope", "database"]
+Source = Literal["dataset", "osm", "web"]
+
+
+class Coordinates(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+
+    def rounded(self, decimals: int = 2) -> "Coordinates":
+        """Round to ~1 km (2 decimals) so precise user locations never travel further than needed."""
+        return Coordinates(lat=round(self.lat, decimals), lon=round(self.lon, decimals))
+
+
+class UserContext(BaseModel):
+    """What the profile agent understood from the conversation."""
+
+    intent: Intent = "clarification"
+    language: str = Field(default="English", description="Language the user writes in, e.g. Spanish")
+    location: str | None = Field(default=None, description="City or neighbourhood mentioned by the user")
+    near_me: bool = Field(default=False, description="User wants places near their current position")
+    cuisines: list[str] = Field(default_factory=list)
+    dietary: list[str] = Field(default_factory=list, description="e.g. vegan, gluten-free, halal")
+    vibe: str | None = Field(default=None, description="Atmosphere, e.g. moody, romantic, quiet")
+    budget: Literal["$", "$$", "$$$", "$$$$"] | None = None
+    occasion: str | None = None
+    restaurant_name: str | None = Field(default=None, description="Specific restaurant the user asks about")
+    search_query: str = Field(default="", description="Short semantic search query built from the request")
+
+
+class ProfileExtraction(BaseModel):
+    """What the LLM must return. Every field is required (nullable where it makes sense):
+    with schema-constrained decoding, optional fields let small models answer `{}`."""
+
+    intent: Intent
+    language: str
+    location: str | None
+    near_me: bool
+    cuisines: list[str]
+    dietary: list[str]
+    vibe: str | None
+    budget: Literal["$", "$$", "$$$", "$$$$"] | None
+    occasion: str | None
+    restaurant_name: str | None
+    search_query: str
+
+    def to_context(self) -> UserContext:
+        return UserContext(**self.model_dump())
+
+
+class ResolvedLocation(BaseModel):
+    query: str
+    display_name: str
+    coordinates: Coordinates
+    city: str | None = None
+    state: str | None = None
+    country_code: str | None = None
+
+    @property
+    def in_california(self) -> bool:
+        return (self.country_code or "").lower() == "us" and (self.state or "").lower() == "california"
+
+
+class PlaceCandidate(BaseModel):
+    """A restaurant from any source, normalised so downstream agents do not care where it came from."""
+
+    id: str
+    name: str
+    source: Source
+    location: str | None = None
+    cuisine: str | None = None
+    rating: float | None = None
+    rating_source: str | None = Field(default=None, description="Site(s) the rating came from, for web places")
+    review_count: int | None = None
+    review_url: str | None = None
+    review_snippet: str | None = None
+    price_range: int | None = None
+    vibe: str | None = None
+    description: str | None = None
+    diet_tags: list[str] = Field(default_factory=list)
+    coordinates: Coordinates | None = None
+    url: str | None = None
+    score: float = 0.0
+
+
+class RecipeCandidate(BaseModel):
+    id: str
+    name: str
+    cuisine: str | None = None
+    ingredients: list[str] = Field(default_factory=list)
+    score: float = 0.0
+
+
+class Recommendation(BaseModel):
+    candidate_id: str = Field(description="id of one of the provided candidates")
+    reasoning: str = Field(description="2-3 sentences explaining why it fits the user")
+
+
+class RecommendationSet(BaseModel):
+    # Required on purpose (see ProfileExtraction): an empty object must not validate
+    summary: str = Field(description="One friendly sentence introducing the picks")
+    restaurants: list[Recommendation]
+    recipes: list[Recommendation]

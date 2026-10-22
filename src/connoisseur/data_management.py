@@ -3,10 +3,12 @@ import json
 import os
 import shutil
 
-import ollama
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
 
 from connoisseur.config import EXTRACTION_MODEL, RESTAURANT_DATA_PATH
+from connoisseur.llm import get_chat_model, message_text
+from connoisseur.settings import get_settings
 
 FILEPATH = str(RESTAURANT_DATA_PATH)
 BACKUP_PATH = FILEPATH + ".bak"
@@ -75,16 +77,17 @@ Output:
 
 
 def llm_model(system_msg, prompt_txt, params=None):
-    """Call a small local model served by Ollama: free, and good enough for extraction/repair.
+    """Call the extraction model through the provider factory (a small Ollama model by default).
 
-    params: optional generation parameters (Ollama options), e.g. {"temperature": 0}
+    params: optional generation parameters, e.g. {"temperature": 0}
     """
-    messages = [
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": prompt_txt},
-    ]
-    response = ollama.chat(model=EXTRACTION_MODEL, messages=messages, options=params)
-    return response["message"]["content"]
+    params = params or {}
+    model = get_chat_model(
+        model=EXTRACTION_MODEL if get_settings().llm_provider == "ollama" else None,
+        temperature=params.get("temperature"),
+    )
+    response = model.invoke([SystemMessage(content=system_msg), HumanMessage(content=prompt_txt)])
+    return message_text(response.content)
 
 
 def JSON_auto_repair_prompts(response, error_message):

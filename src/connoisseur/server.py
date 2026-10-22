@@ -1,30 +1,38 @@
-"""MCP server exposing the restaurant dataset as tools and a resource."""
-import json
+"""MCP server exposing the restaurant guide, semantic search and nearby-place search as tools."""
+from typing import Annotated
 
 from fastmcp import FastMCP
+from pydantic import Field
 
-from connoisseur.config import CULINARY_MAP_PATH, RESTAURANT_DATA_PATH, REVIEW_DATA_PATH
+from connoisseur import data
+from connoisseur.places import osm
+from connoisseur.retrieval import service
+from connoisseur.schemas import UserContext
 
 mcp = FastMCP("Connoisseur-Server")
 
+ShortText = Annotated[str, Field(min_length=1, max_length=200)]
+# Tools the chat agent may call. Every tool here is read-only.
+READ_ONLY_TOOLS = (
+    "get_restaurant_info",
+    "recommend_by_vibe",
+    "get_review",
+    "semantic_search",
+    "search_nearby_restaurants",
+)
 
+
+# Kept for backwards compatibility with the original module API
 def load_restaurant_data() -> list[dict]:
-    """Load the structured restaurant data."""
-    with open(RESTAURANT_DATA_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return data.load_restaurants()
 
 
 def load_review_data() -> list[dict]:
-    """Load the user reviews augmented with image captions."""
-    with open(REVIEW_DATA_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return data.load_reviews()
 
 
 def load_culinary_map() -> str:
-    """Return the raw culinary map text, or an empty string if it was not downloaded."""
-    if not CULINARY_MAP_PATH.exists():
-        return ""
-    return CULINARY_MAP_PATH.read_text(encoding="utf-8")
+    return data.load_culinary_map()
 
 
 # MCP Resource - raw culinary map
@@ -33,127 +41,131 @@ def get_culinary_map() -> str:
     """The full raw California Culinary Map text.
     Contains detailed descriptions of 100+ restaurants across California
     including their vibes, cuisines, ratings, and price ranges."""
-    text = load_culinary_map()
+    text = data.load_culinary_map()
     if not text:
         return "Culinary map not found. Run `python scripts/download_data.py` first."
     return text
 
 
-# TOOL 1 - structured search by name
-@mcp.tool()
-def get_restaurant_info(restaurant_name: str) -> str:
+@mcp.tool(annotations={"readOnlyHint": True})
+def get_restaurant_info(restaurant_name: ShortText) -> dict:
     """Search for a restaurant by name and return its structured details
     including cuisine, rating, price range, and signature dish."""
-    restaurants = load_restaurant_data()
     query = restaurant_name.lower().strip()
-
-    matches = []
-    for restaurant in restaurants:
-        name = restaurant["name"].lower()
-        if query in name or name in query:
-            matches.append(restaurant)
-
+    matches = [
+        r for r in data.load_restaurants() if query in r["name"].lower() or r["name"].lower() in query
+    ]
     if not matches:
-        return json.dumps(
-            {
-                "status": "not_found",
-                "message": f"No restaurant found matching '{restaurant_name}'.",
-                "suggestion": "Try a partial name like 'Iron' or 'Sakura'.",
-            },
-            indent=2,
-        )
-
-    return json.dumps(
-        {"status": "found", "count": len(matches), "results": matches},
-        indent=2,
-    )
+        return {
+            "status": "not_found",
+            "message": f"No restaurant found matching '{restaurant_name}'.",
+            "suggestion": "Try a partial name like 'Iron' or 'Sakura'.",
+        }
+    return {"status": "found", "count": len(matches), "results": matches}
 
 
-# TOOL 2 - search by vibe
-@mcp.tool()
-def recommend_by_vibe(vibe: str) -> str:
+@mcp.tool(annotations={"readOnlyHint": True})
+def recommend_by_vibe(vibe: ShortText) -> dict:
     """Find restaurants that match a given vibe or atmosphere keyword.
     Searches both structured vibe tags and raw text descriptions.
     Examples of vibe keywords: "moody", "sun-drenched", "romantic"."""
-    restaurants = load_restaurant_data()
     vibe_lower = vibe.lower().strip()
 
     # Pass 1: structured vibe tags and environment descriptions
-    structured_matches = []
-    for restaurant in restaurants:
-        vibe_tag = (restaurant.get("vibe") or "").lower()
-        environment = (restaurant.get("environment") or "").lower()
-
-        if vibe_lower in vibe_tag or vibe_lower in environment:
-            structured_matches.append(
-                {
-                    "name": restaurant["name"],
-                    "location": restaurant["location"],
-                    "food_style": restaurant["food_style"],
-                    "rating": restaurant["rating"],
-                    "vibe": restaurant["vibe"],
-                    "price_range": restaurant["price_range"],
-                }
-            )
+    structured_matches = [
+        {
+            "name": r["name"],
+            "location": r["location"],
+            "food_style": r["food_style"],
+            "rating": r["rating"],
+            "vibe": r["vibe"],
+            "price_range": r["price_range"],
+        }
+        for r in data.load_restaurants()
+        if vibe_lower in (r.get("vibe") or "").lower() or vibe_lower in (r.get("environment") or "").lower()
+    ]
 
     # Pass 2: raw text paragraphs (skipped when the map was not downloaded)
     text_excerpts = [
         para.strip()[:300]
-        for para in load_culinary_map().split("\n\n")
+        for para in data.load_culinary_map().split("\n\n")
         if para.strip() and vibe_lower in para.lower()
     ]
-
-    return json.dumps(
-        {
-            "vibe_searched": vibe,
-            "structured_matches": structured_matches,
-            "raw_text_excerpts": text_excerpts[:5],
-        },
-        indent=2,
-    )
+    return {
+        "vibe_searched": vibe,
+        "structured_matches": structured_matches,
+        "raw_text_excerpts": text_excerpts[:5],
+    }
 
 
-# TOOL 3 - review lookup
-@mcp.tool()
-def get_review(restaurant_name: str) -> str:
+@mcp.tool(annotations={"readOnlyHint": True})
+def get_review(restaurant_name: ShortText) -> dict:
     """Retrieve the full review for a restaurant."""
-    reviews = load_review_data()
     query = restaurant_name.lower().strip()
-
     # Reviews don't store the restaurant name, they link to it through itemId
-    names_by_item_id = {r["itemId"]: r["name"] for r in load_restaurant_data()}
+    names_by_item_id = {r["itemId"]: r["name"] for r in data.load_restaurants()}
 
-    matching_review = None
-    for review in reviews:
-        name = names_by_item_id.get(review["itemId"], "")
-        if query in name.lower():
-            matching_review = review
-            break
-
+    matching_review = next(
+        (rv for rv in data.load_reviews() if query in names_by_item_id.get(rv["itemId"], "").lower()), None
+    )
     if not matching_review:
-        return json.dumps(
-            {
-                "status": "not_found",
-                "message": f"No review found for restaurant: {restaurant_name}",
-            },
-            indent=2,
-        )
+        return {"status": "not_found", "message": f"No review found for restaurant: {restaurant_name}"}
 
     captions = matching_review.get("image_captions") or []
+    return {
+        "status": "found",
+        "restaurant": names_by_item_id[matching_review["itemId"]],
+        "reviewer": matching_review["userId"],
+        "rating": matching_review["rating"],
+        "title": matching_review["title"],
+        "review_text": matching_review["text"],
+        "image_description": captions[0] if captions else "N/A",
+        "visit_date": matching_review.get("date", "N/A"),
+    }
 
-    return json.dumps(
-        {
-            "status": "found",
-            "restaurant": names_by_item_id[matching_review["itemId"]],
-            "reviewer": matching_review["userId"],
-            "rating": matching_review["rating"],
-            "title": matching_review["title"],
-            "review_text": matching_review["text"],
-            "image_description": captions[0] if captions else "N/A",
-            "visit_date": matching_review.get("date", "N/A"),
-        },
-        indent=2,
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def semantic_search(
+    query: ShortText,
+    kind: Annotated[str, Field(pattern="^(restaurants|recipes)$")] = "restaurants",
+    limit: Annotated[int, Field(ge=1, le=10)] = 5,
+) -> dict:
+    """Semantic search over the California restaurant guide or the recipe collection.
+    Recipes are ranked by fusing text similarity with CLIP image similarity.
+    Example: query="cozy noodles with warm atmosphere", kind="recipes"."""
+    ctx = UserContext(search_query=query)
+    if kind == "recipes":
+        results = [r.model_dump() for r in service.search_recipes(ctx, k=limit)]
+    else:
+        results = [r.model_dump(exclude_none=True) for r in service.search_restaurants(ctx, k=limit)]
+    if not results:
+        return {"status": "not_found", "message": "No results. Has the index been built (scripts/build_index.py)?"}
+    return {"status": "found", "count": len(results), "results": results}
+
+
+@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
+async def search_nearby_restaurants(
+    location: ShortText,
+    cuisine: Annotated[str | None, Field(max_length=60)] = None,
+    dietary: Annotated[str | None, Field(max_length=60)] = None,
+) -> dict:
+    """Find real restaurants near any place in the world using OpenStreetMap.
+    Example: location="El Poblado, Medellín", cuisine="vegan", dietary="vegan"."""
+    resolved = await osm.geocode(location)
+    if resolved is None:
+        return {"status": "not_found", "message": f"Could not find the location '{location}'."}
+    places = await osm.find_places(
+        resolved.coordinates,
+        cuisines=[cuisine] if cuisine else [],
+        dietary=[dietary] if dietary else [],
+        area_name=resolved.city,
     )
+    return {
+        "status": "found" if places else "not_found",
+        "location": resolved.display_name,
+        "results": [p.model_dump(exclude={"coordinates", "score"}, exclude_none=True) for p in places],
+        "attribution": "Data © OpenStreetMap contributors (ODbL)",
+    }
 
 
 if __name__ == "__main__":

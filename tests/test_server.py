@@ -43,3 +43,17 @@ def test_recommend_by_vibe_returns_structured_matches():
 
 def test_get_review_not_found():
     assert call("get_review", restaurant_name="zzz-does-not-exist")["status"] == "not_found"
+
+
+def test_semantic_search_without_index_explains_how_to_build_it():
+    data = call("semantic_search", query="ramen")
+    assert data["status"] == "not_found"
+    assert "build_index" in data["message"]
+
+
+def test_tool_arguments_are_length_limited():
+    async def _run():
+        async with Client(mcp) as client:
+            return await client.call_tool("get_review", {"restaurant_name": "x" * 500}, raise_on_error=False)
+
+    assert asyncio.run(_run()).is_error

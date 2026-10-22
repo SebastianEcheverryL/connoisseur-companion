@@ -1,54 +1,71 @@
 # Connoisseur Companion
 
-An AI assistant that recommends California restaurants and recipes. It structures messy restaurant text with a local LLM, indexes text and images in a multimodal vector store, orchestrates specialised agents with LangGraph, and exposes the data through an **MCP (Model Context Protocol) server** consumed by a Gradio chat app.
+An AI assistant that recommends restaurants anywhere in the world and recipes to cook at home. A **LangGraph multi-agent workflow** understands the request, searches a curated California guide with **multimodal RAG** or real places nearby on **OpenStreetMap**, has three expert agents review the options in parallel, and returns **grounded** recommendations. The same data is exposed through an **MCP (Model Context Protocol) server**.
 
-Everything runs locally with [Ollama](https://ollama.com), with no paid API needed for the core app.
+Everything runs locally with [Ollama](https://ollama.com): no paid LLM API is needed. The provider layer can switch to Amazon Bedrock for cloud deployment.
 
 ![Connoisseur Companion chat UI](docs/screenshots/chat-ui.jpg)
 
 ## Highlights
 
-- **Reliable LLM extraction.** Free-text restaurant descriptions become typed records: a Pydantic schema validates each output and a *self-repair loop* sends validation errors back to the model (up to 5 retries) until the JSON is valid.
-- **Multimodal RAG.** Text embeddings (`all-MiniLM-L6-v2`, 384-d) and image embeddings (CLIP `clip-vit-base-patch32`, 512-d) live in two ChromaDB collections, with metadata filtering and a weighted **fusion reranker** that blends text and image similarity.
-- **Multi-agent orchestration.** Six role-based agents (user profile, retriever, trend analyst, food-style expert, nutrition expert, recommender) wired as a **LangGraph** state graph, with the analysis nodes running in parallel.
-- **MCP server, client and host.** A FastMCP server exposes 3 tools and 1 resource; a client demonstrates tool calls, **sampling** and **roots**; a Gradio app acts as an MCP host running a ReAct loop over the discovered tools.
-- **Tested and reproducible.** `pytest` suite (LLM mocked, MCP exercised in memory), dataset quality checks, `ruff`, and CI on every push.
-
-![Multimodal fusion results](docs/screenshots/multimodal-fusion.jpg)
+- **Profile agent + router.** One structured LLM call extracts intent, location, cuisines, diet, vibe, budget and language, then routes to the right branch.
+- **Web-search agent.** Outside California (or when the guide has too few matches) it geocodes the location with Nominatim, finds restaurants with Overpass (falling back to Photon when Overpass is busy), ranks them by cuisine and `diet:*` tags, and, with a Tavily key, researches ratings for the top places on review sites. It is deterministic on purpose: web content never decides which tool runs next.
+- **Researched ratings, not generated ones.** Ratings for web places are parsed with regular expressions from review snippets that mention the place by name, normalised to a 0-5 scale, averaged with one value per site, and shown with their source and link (e.g. "⭐ 4.6/5 Tripadvisor, 1,234 reviews"). The LLM never produces a rating.
+- **"Near me" that is honest.** Browser geolocation is optional and rounded to ~1 km before it leaves the page. Without a position, the agent asks where you are instead of answering from the California guide, and a place named in the message wins over the device position.
+- **Multimodal RAG.** MiniLM text embeddings and CLIP image embeddings (ONNX via `fastembed`, no torch) in ChromaDB. Recipes are ranked by a **fusion reranker** that merges text and image similarity per recipe.
+- **Grounded answers.** The recommender may only cite retrieved candidate ids; any invented place is dropped before the answer is shown, and every pick shows its source.
+- **MCP server.** 5 read-only tools and 1 resource, served in-process to the agents and over Streamable HTTP at `/mcp/` for any MCP client.
+- **Agent security.** Input and output guardrails (Llama Prompt Guard 2 + English/Spanish injection rules + Llama Guard 3 locally, Bedrock Guardrails on AWS), untrusted tool and web content screened and isolated, read-only tools, per-user quotas, timeouts and bearer tokens. Threat model in [SECURITY.md](SECURITY.md), adversarial results in the [red-team report](docs/security/redteam-report.md).
+- **Observability with Langfuse.** One trace per request with the LangGraph nodes, every LLM generation (tokens, latency), retrieval, geocoding, OSM, Tavily and MCP tool spans, grouped by session. Prompts can be served from Langfuse Prompt Management, thumbs up/down become scores, and user coordinates, secrets, emails and phone numbers are masked before anything leaves the process.
+- **Production-minded.** Typed settings, provider factory (Ollama / Bedrock), structured logs with request ids, SSE streaming API, HTTP caching and retries for public OSM servers, and a `pytest` suite with the LLM and the network faked.
 
 ## Architecture
 
 ```mermaid
-flowchart LR
-    A[Raw restaurant text] -->|llama3 + Pydantic<br/>self-repair loop| B[(structured_restaurant_data.json)]
-    C[Recipe & review images] -->|gemma3 vision captions| D[(augmented JSON)]
-    B --> E[Text embeddings<br/>MiniLM]
-    D --> E
-    C --> F[Image embeddings<br/>CLIP]
-    E --> G[(ChromaDB<br/>text collection)]
-    F --> H[(ChromaDB<br/>image collection)]
-    G --> I[Fusion reranker]
-    H --> I
-    I --> J[LangGraph multi-agent workflow]
-    J --> K[Gradio chatbot]
-    B --> L[MCP server<br/>3 tools + 1 resource]
-    D --> L
-    L <-->|stdio| M[MCP client<br/>sampling + roots]
-    L <-->|stdio| N[Gradio MCP host<br/>ReAct loop]
+flowchart TD
+    U[User message<br/>+ optional geolocation] --> P[Profile agent<br/>intent, location, preferences]
+    P -->|help / out of scope| R[Fixed reply]
+    P -->|specific restaurant| T[ReAct tool agent<br/>MCP tools in-process]
+    P -->|recipes| L
+    P -->|restaurants| G[Locate<br/>Nominatim]
+    G -->|near me without a position| A[Ask where you are]
+    G -->|California or no location| L[Local retrieval<br/>ChromaDB + fusion]
+    G -->|elsewhere| W[Web-search agent<br/>Overpass / Photon + Tavily]
+    L -->|too few results| W
+    L --> E{{Trend ∥ Style ∥ Nutrition experts}}
+    W --> E
+    E --> C[Recommender<br/>grounded picks + sources]
+```
+
+```
+FastAPI  ── POST /chat (SSE)   ── LangGraph workflow ── Ollama | Bedrock
+         ── POST /chat/sync
+         ── POST /feedback (Langfuse score)
+         ── /mcp/  (MCP Streamable HTTP)
+         ── /ui    (Gradio developer UI)
+         ── GET /health
 ```
 
 ## Repository layout
 
 ```
 src/connoisseur/
-  server.py           FastMCP server: get_restaurant_info, recommend_by_vibe, get_review
-  client.py           MCP client demo: tool calls, sampling (Claude) and roots
-  app.py              Gradio chat UI acting as an MCP host (ReAct loop on Ollama)
-  data_management.py  LLM structuring + Pydantic validation + console CRUD
-  config.py           paths and model names, overridable via env vars
-notebooks/            step-by-step pipeline, 01 extraction -> 08 Gradio chatbot
-data/                 structured_restaurant_data.json, augmented_user_review.json
-scripts/              download_data.py (third-party datasets)
+  api.py              FastAPI app: /chat (SSE), /chat/sync, /mcp, /ui, /health
+  agents/             LangGraph graph, nodes, ReAct tool agent, runner, versioned prompts (*.md)
+  retrieval/          fastembed embeddings, ChromaDB store, fusion reranker, search service
+  places/             OpenStreetMap (Nominatim + Overpass), Tavily, TTL cache
+  security/           guardrails, prompt-injection screening, spotlighting, quotas, PII redaction
+  server.py           FastMCP server: 5 read-only tools + culinary map resource
+  llm.py              provider factory (Ollama / Bedrock)
+  settings.py         typed settings from env vars / .env
+  schemas.py          shared Pydantic contracts
+  app.py              Gradio developer UI
+  client.py           MCP client demo: tool calls, sampling and roots
+  data_management.py  LLM structuring with a self-repair loop + console CRUD
+scripts/              download_data.py, build_index.py, sync_prompts.py
+infra/langfuse/       docker-compose for a local Langfuse
+redteam/              promptfoo adversarial suite against the running API
+notebooks/            the original step-by-step pipeline, 01 extraction -> 08 chatbot
 tests/                pytest suite
 ```
 
@@ -57,45 +74,65 @@ tests/                pytest suite
 Requirements: Python 3.12+ and [Ollama](https://ollama.com) running locally.
 
 ```bash
-ollama pull llama3 && ollama pull llama3.1 && ollama pull gemma3
+ollama pull llama3.1 && ollama pull llama3 && ollama pull llama-guard3:1b
 
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -e .                                        # core app
-pip install -e ".[notebooks]"                           # optional: notebooks 03-08
-cp .env.example .env                                    # optional settings
+pip install -e ".[ui]"                                  # API + developer UI
+cp .env.example .env                                    # optional settings (Tavily key, models...)
 
-python scripts/download_data.py                         # raw IBM text/datasets (see Credits)
+python scripts/download_data.py --with-images           # raw IBM datasets (see Credits)
+python scripts/build_index.py                           # vector index in .chroma/ (~1 min, CPU)
 
-python -m connoisseur.app                               # chat UI (add --share for a public link)
-python -m connoisseur.client                            # MCP client demo (needs ANTHROPIC_API_KEY)
+uvicorn connoisseur.api:app --reload                    # http://localhost:8000/ui
+```
+
+Other entry points:
+
+```bash
+curl -N localhost:8000/chat -H "content-type: application/json" \
+     -d '{"message": "a quiet vegan cafe in El Poblado, Medellín"}'
+python -m connoisseur.client                            # MCP client demo (sampling runs on Ollama)
 python -m connoisseur.data_management                   # console tool to browse/add/edit restaurants
 ```
 
-The notebooks are meant to be run in order. Notebooks 03-05 share a persistent ChromaDB index (`CHROMA_DIR`, default `~/chroma_multimodal`), so run notebook 03 first. Notebook 03 also downloads the recipe images (~210 MB).
+### Observability (optional)
+
+```bash
+docker compose -f infra/langfuse/docker-compose.yml up -d   # Langfuse at http://localhost:3000
+# login: dev@connoisseur.local / connoisseur-dev
+# in .env: LANGFUSE_PUBLIC_KEY=pk-lf-local-dev  LANGFUSE_SECRET_KEY=sk-lf-local-dev
+python scripts/sync_prompts.py                              # optional: publish prompts, then LANGFUSE_PROMPTS=true
+```
+
+![Langfuse trace of a recommendation](docs/screenshots/langfuse-trace.png)
 
 ### Tests
 
 ```bash
 pip install -e ".[dev]"
-pytest
+pytest              # LLM and HTTP are faked; index tests run only if .chroma/ exists
 ruff check src tests scripts
 ```
 
 ## Technical notes
 
-- **Why a self-repair loop.** Small local models often return almost-valid JSON. Feeding the exact Pydantic error back to the model fixes most cases without a larger model or constrained decoding.
-- **Why two embedding spaces.** Text and image vectors are not comparable, so each lives in its own collection. The fusion reranker min-max normalises scores per modality and combines them with `w_text` / `w_img`, so you can bias results toward text or images.
-- **Why MCP.** Putting the data behind an MCP server decouples it from the UI: the same server is used by the demo client and by the Gradio host, and any MCP-capable assistant could use it too.
-- **Local-first.** Chat, extraction and captioning use Ollama models; Anthropic is only used by the MCP client's sampling demo.
+- **Why required fields in LLM schemas.** With schema-constrained decoding, a schema whose fields are all optional lets a small model answer `{}`. The extraction and recommendation schemas make every field required (nullable where needed), which fixed misrouted intents with `llama3.1`.
+- **Why fixed help text.** An earlier version let the LLM answer greetings freely; it invented a restaurant with an address and a phone number. Help and refusals are now fixed text in English or Spanish.
+- **Why a deterministic web agent.** Letting an LLM pick tools based on web pages invites indirect prompt injection. The web branch always runs the same steps, and web text reaches the recommender wrapped as untrusted data.
+- **Why ONNX embeddings.** `fastembed` produces the same MiniLM and CLIP vectors as the notebooks without torch, which keeps the future Lambda container small.
+- **Why per-entity fusion.** The notebook ranked text and image hits as separate rows. The package merges them per recipe, so a recipe that matches by text and by image ranks higher.
+- **Being a good OSM citizen.** Nominatim calls are throttled to 1 per second, results are cached (geocoding for a month, places for a day), Overpass falls back across public mirrors with backoff, a circuit breaker skips Overpass for 5 minutes after it fails (Photon answers meanwhile), and answers credit OpenStreetMap contributors.
 
 ## Known limitations
 
 - `price_range` comes from LLM extraction and is imperfect: some `$$$$` entries were recorded as 3, and 42 of the 201 restaurants have no price (`null`). The dataset-quality tests check ranges and schema, not factual accuracy.
 - The source text contains a few duplicated restaurant descriptions, so some names appear twice.
 - Answer quality depends on the local models you run; smaller models make more extraction and tool-calling mistakes.
+- With the three expert agents enabled, a full recommendation takes about 1 minute on a laptop with `llama3.1` 8B. Set `ENABLE_EXPERT_ANALYSIS=false` for faster answers.
+- OpenStreetMap coverage varies by city: some places have no cuisine or diet tags, which limits ranking.
 
 ## Credits
 
-This project grew out of the IBM **RAG and Agentic AI** course (Coursera). The dataset sources (`California-Culinary-Map.txt`, `Recipes.json`, `Synthetic-User-Reviews.json` and the synthetic recipe images) belong to IBM and are **not redistributed**; `scripts/download_data.py` fetches them from their original location. `data/structured_restaurant_data.json` and `data/augmented_user_review.json` are derived outputs produced by running the notebooks with local models. The course provided the scenario, datasets and lab scaffolding; the code here was reworked to run fully locally with Ollama and extended with the packaging, tests, CI and dataset-quality checks.
+This project grew out of the IBM **RAG and Agentic AI** course (Coursera). The dataset sources (`California-Culinary-Map.txt`, `Recipes.json`, `Synthetic-User-Reviews.json` and the synthetic recipe images) belong to IBM and are **not redistributed**; `scripts/download_data.py` fetches them from their original location. `data/structured_restaurant_data.json` and `data/augmented_user_review.json` are derived outputs produced by running the notebooks with local models. The course provided the scenario, datasets and lab scaffolding; the code here was reworked to run fully locally with Ollama and extended with the packaging, the production API, real retrieval in the agent workflow (the course notebook simulated it with the LLM), the web-search agent, tests, CI and dataset-quality checks. Place data from OpenStreetMap is © OpenStreetMap contributors, available under the ODbL.
 
 Licensed under the [MIT License](LICENSE).

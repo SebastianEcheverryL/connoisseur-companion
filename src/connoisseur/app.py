@@ -1,151 +1,120 @@
-"""Gradio chat UI acting as an MCP host: a ReAct loop over the server's tools."""
+"""Gradio developer UI: chats with the LangGraph workflow in-process and shows each agent step.
+
+Standalone:   python -m connoisseur.app [--share]
+Inside API:   uvicorn connoisseur.api:app  ->  http://localhost:8000/ui
+"""
 import argparse
 import os
-from pathlib import Path
+import uuid
+
+os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")  # no telemetry from the dev UI
 
 import gradio as gr
-from fastmcp.client import Client, PythonStdioTransport
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_ollama import ChatOllama
 
-from connoisseur.config import CHAT_MODEL, PROJECT_DIR
+from connoisseur import observability
+from connoisseur.agents.runner import stream_chat
+from connoisseur.schemas import Coordinates
 
-SERVER_SCRIPT = str(Path(__file__).parent / "server.py")
-MAX_REACT_STEPS = 10
-SYSTEM_PROMPT = (
-    "You are a food recommendation expert with expertise in global cuisines. "
-    "You can recommend restaurants and recipes based on user preferences and dietary restrictions. "
-    "Use the available tools to look up restaurants, vibes and reviews before answering."
-)
-
-
-def make_model() -> ChatOllama:
-    return ChatOllama(model=CHAT_MODEL, temperature=0.7)
+EXAMPLES = [
+    "Un café vegano tranquilo en El Poblado, Medellín",
+    "Recomiéndame sushi cerca de mí",
+    "Find me a moody Italian spot in Pasadena",
+    "Tell me about Sakura Garden and its review",
+    "What should I cook tonight? Something with noodles",
+]
 
 
-async def chat_with_agent(user_message: str, history: list) -> str:
-    """Connect to the MCP server, discover tools, and run a ReAct loop.
-    The LLM decides which tools to call, calls them via the MCP server,
-    and repeats until it produces a final text response."""
-    transport = PythonStdioTransport(
-        script_path=SERVER_SCRIPT,
-        env={**os.environ, "PYTHONPATH": str(PROJECT_DIR / "src")},
-    )
-
-    async with Client(transport) as client:
-        mcp_tools = await client.list_tools()
-
-        # Convert MCP tool schemas to OpenAI-style tool definitions for the LLM
-        tool_definitions = [
-            {
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description or "",
-                    "parameters": t.inputSchema,
-                },
-            }
-            for t in mcp_tools
-        ]
-
-        model = make_model().bind_tools(tool_definitions)
-
-        messages = [SystemMessage(content=SYSTEM_PROMPT)]
-        for msg in history:
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-            if role == "user" and content:
-                messages.append(HumanMessage(content=content))
-            elif role == "assistant" and content:
-                messages.append(AIMessage(content=content))
-        messages.append(HumanMessage(content=user_message))
-
-        # ReAct loop: call tools until the LLM returns a plain text reply
-        for _ in range(MAX_REACT_STEPS):
-            response = await model.ainvoke(messages)
-            messages.append(response)
-
-            if not response.tool_calls:
-                raw = response.content
-                if isinstance(raw, list):
-                    return " ".join(
-                        b.get("text", "") if isinstance(b, dict) else str(b)
-                        for b in raw
-                    )
-                return str(raw)
-
-            for tool_call in response.tool_calls:
-                result = await client.call_tool(tool_call["name"], tool_call["args"])
-                tool_output = (
-                    " ".join(
-                        item.text if hasattr(item, "text") else str(item)
-                        for item in result.content
-                    )
-                    if result.content
-                    else "(no result)"
-                )
-                messages.append(ToolMessage(content=tool_output, tool_call_id=tool_call["id"]))
-
-        return "I wasn't able to complete that request. Please try again."
+# Runs in the browser: asks for permission, rounds to 2 decimals (~1 km) before anything leaves the page
+GEOLOCATION_JS = """
+async () => new Promise((resolve) => {
+  if (!navigator.geolocation) { resolve("unavailable"); return; }
+  navigator.geolocation.getCurrentPosition(
+    (p) => resolve(p.coords.latitude.toFixed(2) + ", " + p.coords.longitude.toFixed(2)),
+    () => resolve("permission denied"),
+    {timeout: 10000, maximumAge: 600000}
+  );
+})
+"""
 
 
-async def handle_chat(user_message, history):
-    if history is None:
-        history = []
+def parse_coords(text: str | None) -> Coordinates | None:
+    """Parse the "lat, lon" string filled by the location button; anything else means no location."""
+    try:
+        lat, lon = (float(part) for part in (text or "").split(","))
+        return Coordinates(lat=lat, lon=lon).rounded()
+    except ValueError:
+        return None
+
+
+async def handle_chat(user_message, history, shared_location=None, session_id=None, trace_ids=None):
+    history = history or []
+    trace_ids = dict(trace_ids or {})
     if not user_message or not user_message.strip():
-        yield history
+        yield history, "", trace_ids
         return
 
-    # Show a thinking placeholder while the agent runs
+    previous = [{"role": m["role"], "content": m["content"]} for m in history
+                if isinstance(m.get("content"), str)]
     history = history + [
         {"role": "user", "content": user_message},
-        {"role": "assistant", "content": "Thinking..."},
+        {"role": "assistant", "content": "_Thinking..._"},
     ]
-    yield history
+    yield history, "", trace_ids
 
-    response_text = await chat_with_agent(user_message, history[:-2])
-    history[-1] = {"role": "assistant", "content": response_text}
-    yield history
+    steps: list[str] = []
+    async for event in stream_chat(user_message, previous, parse_coords(shared_location), session_id=session_id):
+        if event["type"] == "step":
+            steps.append(event["label"])
+            history[-1] = {"role": "assistant", "content": "_" + " → ".join(steps) + "..._"}
+        elif event["type"] == "answer":
+            footer = f"\n\n<sub>route: {' · '.join(event['route'])} · {event['seconds']}s</sub>"
+            history[-1] = {"role": "assistant", "content": (event["answer"] or "(no answer)") + footer}
+            if event.get("trace_id"):
+                trace_ids[len(history) - 1] = event["trace_id"]  # message index -> trace, for feedback
+        yield history, "", trace_ids
+
+
+def handle_feedback(data: gr.LikeData, trace_ids):
+    """Send the 👍/👎 on an answer to Langfuse as a `user_feedback` score on that answer's trace."""
+    index = data.index[0] if isinstance(data.index, list | tuple) else data.index
+    trace_id = (trace_ids or {}).get(index)
+    if trace_id and data.liked in (True, False):
+        observability.score(trace_id, "user_feedback", 1.0 if data.liked else 0.0, data_type="BOOLEAN")
 
 
 def build_demo() -> gr.Blocks:
     with gr.Blocks(title="Connoisseur Companion") as demo:
         gr.Markdown(
             "# Connoisseur Companion\n"
-            "Your AI guide to California's restaurant scene. "
-            "Ask me about restaurants by name, cuisine, or vibe!"
+            "Restaurants anywhere (California guide + OpenStreetMap), recipes and reviews. "
+            "Tell me where you are and what you feel like eating."
         )
-
-        chatbot = gr.Chatbot(height=500)
-        msg_input = gr.Textbox(
-            label="Ask about restaurants",
-            placeholder='e.g., "Find me a moody spot in DTLA" or "Tell me about Sakura Garden"',
-        )
-
+        session_id = gr.State(lambda: uuid.uuid4().hex)  # one Langfuse session per browser tab
+        trace_ids = gr.State({})
+        chatbot = gr.Chatbot(height=520, feedback_options=("Like", "Dislike"))
+        msg_input = gr.Textbox(label="Your message", placeholder=EXAMPLES[0])
         with gr.Row():
-            btn1 = gr.Button("Find moody restaurants", size="sm")
-            btn2 = gr.Button("Tell me about Iron & Embers", size="sm")
-            btn3 = gr.Button("Zen dining in Little Tokyo?", size="sm")
-
-        msg_input.submit(handle_chat, [msg_input, chatbot], [chatbot])
-        msg_input.submit(lambda: "", None, msg_input)
-
-        btn1.click(handle_chat, [gr.State("Find me some moody restaurants"), chatbot], [chatbot])
-        btn2.click(handle_chat, [gr.State("Tell me about Iron & Embers"), chatbot], [chatbot])
-        btn3.click(
-            handle_chat,
-            [gr.State("What's a zen dining experience in Little Tokyo?"), chatbot],
-            [chatbot],
-        )
+            location_box = gr.Textbox(
+                label="Shared location (rounded to ~1 km)",
+                placeholder="Not shared: the assistant will ask where you are",
+                interactive=False,
+                scale=4,
+            )
+            locate_btn = gr.Button("📍 Use my location", scale=1)
+            clear_btn = gr.Button("Stop sharing", scale=1)
+        gr.Examples(EXAMPLES, inputs=msg_input)
+        locate_btn.click(None, None, location_box, js=GEOLOCATION_JS)
+        clear_btn.click(lambda: "", None, location_box)
+        msg_input.submit(handle_chat, [msg_input, chatbot, location_box, session_id, trace_ids],
+                         [chatbot, msg_input, trace_ids])
+        chatbot.like(handle_feedback, [trace_ids], None)
     return demo
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Connoisseur Companion chat UI")
+    parser = argparse.ArgumentParser(description="Connoisseur Companion developer UI")
     parser.add_argument("--share", action="store_true", help="create a public Gradio link")
     args = parser.parse_args()
-
-    print("Starting Connoisseur Companion...")
     build_demo().launch(share=args.share, theme=gr.themes.Soft())
 
 

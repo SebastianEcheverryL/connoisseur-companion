@@ -10,7 +10,7 @@ Fields:
   - "lookup": asks about a specific restaurant by name or its reviews ("tell me about Sakura Garden")
   - "clarification": greeting, thanks, or asks what you can do
   - "database": wants to add, edit or delete restaurants
-  - "out_of_scope": anything unrelated to food, restaurants or cooking
+  - "out_of_scope": anything unrelated to food, restaurants or cooking (writing code, homework, weather, sports, news, general knowledge)
 - language: the language of the user's latest message, in English (e.g. "Spanish", "English")
 - location: city or neighbourhood the user mentioned, written as they would search a map (e.g. "El Poblado, Medellín", "Silver Lake, Los Angeles"). Use null when none was mentioned in the conversation. Never use "near me" or "here" as a location.
 - near_me: true when the user wants places close to where they are ("near me", "cerca de mí", "around here", "nearby") without naming a place; otherwise false.

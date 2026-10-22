@@ -41,7 +41,9 @@ ALLERGY_CONTEXT = re.compile(r"allerg|al[eé]rgi|intoleran|celiac|cel[ií]ac|sin
 
 _CLAIM = re.compile(
     r"[^.!?\n]*\b("
-    r"(is|are|it's|it is)\s+(completely\s+|totally\s+|100%\s+)?[\w-]*[- ]free"
+    # "is peanut-free", and also "is a peanut-free option" (missed until the eval judge flagged it)
+    r"(is|are|it's|it is)\s+(an?\s+)?(completely\s+|totally\s+|100%\s+)?[\w-]*[- ]free"
+    r"|\b[\w-]+-free (option|dish|recipe|choice|pick|alternative)"
     r"|safe for (you|your|a|people with)[^.!?\n]*allerg"
     r"|free (of|from) [\w\s-]*(allergen|peanut|nut|gluten|dairy|shellfish)"
     r"|(es|son|está|están)\s+(totalmente\s+|completamente\s+)?(libre|libres) de"

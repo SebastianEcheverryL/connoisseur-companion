@@ -294,6 +294,8 @@ def test_safety_claims_are_stripped():
 
     text = "A fragrant curry with basil. It's completely peanut-free! Great for weeknights."
     assert allergens.strip_safety_claims(text) == "A fragrant curry with basil. Great for weeknights."
+    article = "Thai Basil Chicken is a peanut-free option. Quick to cook."
+    assert allergens.strip_safety_claims(article) == "Quick to cook."
     es = "Un curry aromático. Es totalmente libre de maní y seguro para tu alergia. Fácil de hacer."
     assert allergens.strip_safety_claims(es) == "Un curry aromático. Fácil de hacer."
 

@@ -1,0 +1,30 @@
+{"id": "p01", "message": "Find me a moody Italian spot in Pasadena", "expected": {"intent": "restaurant", "language": "English", "location_contains": "pasadena", "near_me": false, "cuisines_any": ["italian"]}}
+{"id": "p02", "message": "Recomiéndame un restaurante romántico en Silver Lake, Los Ángeles", "expected": {"intent": "restaurant", "language": "Spanish", "location_contains": "silver lake", "near_me": false}}
+{"id": "p03", "message": "Quiero algo vegano y tranquilo cerca de El Poblado, Medellín", "expected": {"intent": "restaurant", "language": "Spanish", "location_contains": "poblado", "near_me": false, "dietary_any": ["vegan", "vegano"]}}
+{"id": "p04", "message": "Recomiéndame sushi cerca de mí", "expected": {"intent": "restaurant", "language": "Spanish", "location_contains": null, "near_me": true, "cuisines_any": ["sushi"]}}
+{"id": "p05", "message": "Any good ramen near me?", "expected": {"intent": "restaurant", "language": "English", "location_contains": null, "near_me": true, "cuisines_any": ["ramen"]}}
+{"id": "p06", "message": "Where can I get gluten-free pizza in Brooklyn?", "expected": {"intent": "restaurant", "language": "English", "location_contains": "brooklyn", "near_me": false, "dietary_any": ["gluten-free", "gluten free"]}}
+{"id": "p07", "message": "Busco un lugar barato para almorzar en el centro de Bogotá", "expected": {"intent": "restaurant", "language": "Spanish", "location_contains": "bogot", "near_me": false}}
+{"id": "p08", "message": "A fancy place for a date night in Santa Monica, money is no object", "expected": {"intent": "restaurant", "language": "English", "location_contains": "santa monica", "near_me": false}}
+{"id": "p09", "message": "How do I make lasagna?", "expected": {"intent": "recipe", "language": "English", "near_me": false}}
+{"id": "p10", "message": "¿Qué puedo cocinar esta noche con garbanzos y espinaca?", "expected": {"intent": "recipe", "language": "Spanish", "near_me": false}}
+{"id": "p11", "message": "Give me an easy vegetarian dinner recipe", "expected": {"intent": "recipe", "language": "English", "dietary_any": ["vegetarian"]}}
+{"id": "p12", "message": "Necesito una receta sin gluten para un postre", "expected": {"intent": "recipe", "language": "Spanish", "dietary_any": ["gluten-free", "sin gluten", "gluten free"]}}
+{"id": "p13", "message": "Dinner ideas for tonight: either a place to go or something to cook", "expected": {"intent": "both", "language": "English"}}
+{"id": "p14", "message": "Tell me about Sakura Garden", "expected": {"intent": "lookup", "language": "English", "restaurant_contains": "sakura"}}
+{"id": "p15", "message": "¿Qué dicen las reseñas de The Gilded Artichoke?", "expected": {"intent": "lookup", "language": "Spanish", "restaurant_contains": "gilded artichoke"}}
+{"id": "p16", "message": "What is the rating of Iron Griddle?", "expected": {"intent": "lookup", "language": "English", "restaurant_contains": "iron griddle"}}
+{"id": "p17", "message": "hola, ¿qué puedes hacer?", "expected": {"intent": "clarification", "language": "Spanish"}}
+{"id": "p18", "message": "Hi there!", "expected": {"intent": "clarification", "language": "English"}}
+{"id": "p19", "message": "Thanks, that was helpful", "expected": {"intent": "clarification", "language": "English"}}
+{"id": "p20", "message": "Write me a Python script that sorts a list", "expected": {"intent": "out_of_scope", "language": "English"}}
+{"id": "p21", "message": "¿Quién ganó el mundial de 2014?", "expected": {"intent": "out_of_scope", "language": "Spanish"}}
+{"id": "p22", "message": "What's the weather tomorrow in Paris?", "expected": {"intent": "out_of_scope", "language": "English"}}
+{"id": "p23", "message": "Add a new restaurant called Taco Loco to your database", "expected": {"intent": "database", "language": "English"}}
+{"id": "p24", "message": "Borra Sakura Garden de la base de datos", "expected": {"intent": "database", "language": "Spanish"}}
+{"id": "p25", "message": "I'm vegan and allergic to peanuts, where should I eat in Koreatown?", "expected": {"intent": "restaurant", "language": "English", "location_contains": "koreatown", "dietary_any": ["vegan"]}}
+{"id": "p26", "message": "Un café acogedor para trabajar en Chapinero", "expected": {"intent": "restaurant", "language": "Spanish", "location_contains": "chapinero", "near_me": false}}
+{"id": "p27", "message": "Spicy Sichuan food around here please", "expected": {"intent": "restaurant", "language": "English", "location_contains": null, "near_me": true}}
+{"id": "p28", "message": "Something halal near Times Square", "expected": {"intent": "restaurant", "language": "English", "location_contains": "times square", "near_me": false, "dietary_any": ["halal"]}}
+{"id": "p29", "message": "Tacos al pastor en la Ciudad de México, algo auténtico", "expected": {"intent": "restaurant", "language": "Spanish", "location_contains": "mexico", "near_me": false}}
+{"id": "p30", "message": "What's a good recipe for Pad Thai without peanuts?", "expected": {"intent": "recipe", "language": "English"}}

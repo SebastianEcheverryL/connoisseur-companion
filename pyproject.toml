@@ -59,9 +59,13 @@ connoisseur = ["agents/prompts/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 markers = ["index: needs the ONNX embedding models and a built vector index (slow, downloads models)"]
 
 [tool.ruff]
 line-length = 110
 src = ["src", "tests"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["connoisseur", "evals"]

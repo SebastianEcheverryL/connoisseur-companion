@@ -7,6 +7,8 @@ os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("ENABLE_DEV_UI", "false")
 # Guardrail models are exercised in tests/test_security.py with fakes; the rest of the suite skips them
 os.environ.setdefault("GUARDRAIL_PROVIDER", "none")
+# The grounding check is tested on its own (tests/test_evals.py); routes elsewhere stay predictable
+os.environ.setdefault("ENABLE_GROUNDING_CHECK", "false")
 os.environ.setdefault("PER_MINUTE_MESSAGE_LIMIT", "1000")
 os.environ.setdefault("DAILY_MESSAGE_LIMIT", "1000")
 os.environ.setdefault("CHROMA_DIR", os.path.join(os.path.dirname(__file__), ".no-index"))

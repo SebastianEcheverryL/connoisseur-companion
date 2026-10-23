@@ -1,0 +1,12 @@
+# Only what the image build needs: pyproject, src, scripts and the small committed data files
+*
+!pyproject.toml
+!README.md
+!src/
+!scripts/
+!data/
+data/recipe_images/
+data/synthetic_recipe_images/
+data/*.zip
+**/__pycache__/
+**/*.pyc

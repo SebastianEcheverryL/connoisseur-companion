@@ -46,6 +46,9 @@ class FeedbackRequest(BaseModel):
     comment: str | None = Field(default=None, max_length=1000)
 
 
+# Fields of the runner's answer event that stay on the server (raw tool output is not for clients)
+INTERNAL_FIELDS = {"evidence"}
+
 mcp_app = mcp.http_app(path="/", stateless_http=True)
 
 
@@ -137,6 +140,7 @@ def _history(req: ChatRequest) -> list[dict]:
 async def _sse(req: ChatRequest) -> AsyncIterator[str]:
     try:
         async for event in stream_chat(req.message, _history(req), req.location, session_id=req.session_id):
+            event = {k: v for k, v in event.items() if k not in INTERNAL_FIELDS}
             yield f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
     except Exception:  # report the failure to the client instead of cutting the stream
         log.exception("chat_failed")
@@ -157,7 +161,8 @@ async def chat(req: ChatRequest, _: str = Depends(enforce_quota)):
 @app.post("/chat/sync", dependencies=[Depends(require_api_key)])
 async def chat_sync(req: ChatRequest, _: str = Depends(enforce_quota)) -> dict:
     """Same as /chat but returns only the final answer as JSON (handy for scripts and evals)."""
-    return await run_chat(req.message, _history(req), req.location, session_id=req.session_id)
+    result = await run_chat(req.message, _history(req), req.location, session_id=req.session_id)
+    return {k: v for k, v in result.items() if k not in INTERNAL_FIELDS}
 
 
 @app.post("/feedback", dependencies=[Depends(require_api_key)])

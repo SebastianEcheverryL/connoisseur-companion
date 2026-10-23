@@ -1,0 +1,12 @@
+[
+  {"recipe_id": 42, "label": "Roasted Red Pepper Hummus", "query": "a creamy beige swirled dip drizzled with golden oil and red paprika, topped with a red pepper ring, flatbread on the side"},
+  {"recipe_id": 20, "label": "Beef Bulgogi", "query": "thin slices of dark glazed beef with green onion rings and sesame seeds on a platter, a bowl of white rice nearby"},
+  {"recipe_id": 84, "label": "Salisbury Steak with Mushroom Gravy", "query": "a thick meat patty smothered in brown gravy with lots of sliced mushrooms and a pat of butter"},
+  {"recipe_id": 7, "label": "Tomato Basil Soup", "query": "a bowl of smooth bright red soup garnished with fresh green leaves"},
+  {"recipe_id": 106, "label": "Hot and Sour Soup", "query": "a pot of orange broth with white cubes, noodles, an egg yolk and chopped scallions"},
+  {"recipe_id": 69, "label": "Lemon Garlic Roasted Brussels Sprouts", "query": "a rustic bowl of small round green vegetables cut in half and charred, with lemon halves and garlic cloves"},
+  {"recipe_id": 13, "label": "Miso-Glazed Cod with Sesame Rice", "query": "a golden caramelized white fish fillet on a bed of rice in brown sauce sprinkled with sesame seeds, chopsticks beside"},
+  {"recipe_id": 47, "label": "Pollo a la Brasa (Peruvian Roast Chicken)", "query": "golden crispy roasted chicken legs on a clay platter surrounded by lime halves"},
+  {"recipe_id": 10, "label": "Beef Tacos with Salsa Verde", "query": "crunchy yellow shells filled with ground meat, shredded cheddar, green sauce, diced tomato and sour cream"},
+  {"recipe_id": 51, "label": "Herbed Chicken Skewers", "query": "grilled cubes of chicken on metal sticks with rosemary sprigs and lemon wedges"}
+]

@@ -350,7 +350,12 @@ async def recommend(state: ChatState) -> dict:
     )
     picks = await structured_call(RecommendationSet, load_prompt("recommender"), user)
     allergies = allergens.detect_allergies(state["message"], ctx.dietary)
-    return format_answer(picks, restaurants, recipes, ctx, location, allergies)
+    result = format_answer(picks, restaurants, recipes, ctx, location, allergies)
+    # What the recommender was allowed to rely on: used by groundedness evaluations
+    result["evidence"] = [json.dumps(_candidate_line(c), ensure_ascii=False) for c in restaurants] + [
+        r.model_dump_json(exclude={"score"}) for r in recipes
+    ] + [f"{s.title}: {s.content}" for s in snippets]
+    return result
 
 
 def ground(picks: RecommendationSet | None, restaurants, recipes) -> tuple[list, list]:

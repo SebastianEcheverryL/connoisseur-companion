@@ -31,3 +31,4 @@ class ChatState(TypedDict, total=False):
     answer: str
     cards: list[dict]
     route: list[str]  # which branches ran, for tracing and evals
+    evidence: list[str]  # what the answering agent saw (tool results or candidates), for groundedness checks

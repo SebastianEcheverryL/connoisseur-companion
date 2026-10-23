@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     max_react_steps: int = 6
     enable_expert_analysis: bool = True
     min_local_results: int = 3
+    # Verify the tool agent's answer against the tool results and remove unsupported claims (1 extra LLM call).
+    # On by default: in repeated runs it cut invented facts from 27% to 7% (docs/evals/report.md)
+    enable_grounding_check: bool = True
 
     # Embeddings (ONNX models served by fastembed)
     text_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"

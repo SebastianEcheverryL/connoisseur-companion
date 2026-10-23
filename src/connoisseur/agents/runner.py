@@ -87,6 +87,8 @@ async def stream_chat(
             "location": location.display_name if location else None,
             "seconds": elapsed,
             "trace_id": trace.trace_id,
+            # Internal: what the answering agent saw. Used by evals; the API strips it before responding.
+            "evidence": final.get("evidence", []),
         }
         trace.finish(
             output={"answer": answer["answer"], "cards": len(answer["cards"])},

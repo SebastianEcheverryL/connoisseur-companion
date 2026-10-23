@@ -40,3 +40,7 @@ infra/langfuse/.env
 
 # promptfoo raw output (the summary goes to docs/security/redteam-report.md)
 redteam/results.json
+
+guia-del-proyecto.md
+# Raw evaluation outputs (summaries go to docs/evals/)
+evals/results/

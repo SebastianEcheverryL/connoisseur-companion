@@ -7,6 +7,7 @@ import asyncio
 from fastmcp import Client
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from connoisseur.agents import grounding
 from connoisseur.agents.prompts import load_prompt
 from connoisseur.agents.state import ChatState
 from connoisseur.llm import get_chat_model, message_text
@@ -62,13 +63,19 @@ async def tool_agent(state: ChatState) -> dict:
         model = get_chat_model().bind_tools(tool_definitions)
         messages = [SystemMessage(content=load_prompt("tool_agent")), *_history_messages(state),
                     HumanMessage(content=state["message"])]
-        tools_used = []
+        tools_used: list[str] = []
+        evidence: list[str] = []
 
         for _ in range(max_steps):
             response = await model.ainvoke(messages)
             messages.append(response)
             if not response.tool_calls:
-                return {"answer": message_text(response.content), "route": state["route"] + tools_used}
+                answer = message_text(response.content)
+                route = state["route"] + tools_used
+                if get_settings().enable_grounding_check and evidence:
+                    answer, revised = await grounding.enforce(state["message"], answer, evidence)
+                    route.append("grounding:revised" if revised else "grounding:ok")
+                return {"answer": answer, "route": route, "evidence": evidence}
 
             for call in response.tool_calls:
                 tools_used.append(f"tool:{call['name']}")
@@ -76,10 +83,12 @@ async def tool_agent(state: ChatState) -> dict:
                     output = f"Tool '{call['name']}' is not available."
                 else:
                     output = await call_mcp_tool(client, call["name"], call["args"])
+                    evidence.append(output)
                 messages.append(ToolMessage(content=output, tool_call_id=call["id"]))
 
     log.warning("react_step_limit_reached", steps=max_steps)
     return {
         "answer": "I wasn't able to complete that request. Please try rephrasing it.",
         "route": state["route"] + tools_used + ["step_limit"],
+        "evidence": evidence,
     }

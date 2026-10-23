@@ -13,7 +13,9 @@ from connoisseur.observability import get_langfuse
 from connoisseur.settings import get_settings
 
 PROMPT_DIR = Path(__file__).parent
-PROMPT_NAMES = ("profile", "trend_analyst", "style_expert", "nutrition_expert", "recommender", "tool_agent")
+PROMPT_NAMES = (
+    "profile", "trend_analyst", "style_expert", "nutrition_expert", "recommender", "tool_agent", "grounding_check",
+)
 LANGFUSE_PREFIX = "connoisseur/"
 CACHE_TTL_S = 300
 

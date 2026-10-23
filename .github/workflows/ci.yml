@@ -18,7 +18,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
-      - run: ruff check src tests scripts redteam
+      - run: ruff check src tests scripts redteam evals
       # LLM, guardrail models and web calls are faked; tests that need the built vector index are skipped
       - run: pytest -q
       - name: Notebooks must be committed without outputs

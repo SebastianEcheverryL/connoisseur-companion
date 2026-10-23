@@ -4,7 +4,7 @@ An AI assistant that recommends restaurants anywhere in the world and recipes to
 
 Everything runs locally with [Ollama](https://ollama.com): no paid LLM API is needed. The provider layer can switch to Amazon Bedrock for cloud deployment.
 
-![Connoisseur Companion chat UI](docs/screenshots/chat-ui.jpg)
+![Connoisseur Companion web UI](docs/screenshots/web-ui.png)
 
 ## Highlights
 
@@ -18,6 +18,7 @@ Everything runs locally with [Ollama](https://ollama.com): no paid LLM API is ne
 - **Agent security.** Input and output guardrails (Llama Prompt Guard 2 + English/Spanish injection rules + Llama Guard 3 locally, Bedrock Guardrails on AWS), untrusted tool and web content screened and isolated, read-only tools, per-user quotas, timeouts and bearer tokens. Threat model in [SECURITY.md](SECURITY.md), adversarial results in the [red-team report](docs/security/redteam-report.md).
 - **Measured, not assumed.** Evaluation suites for retrieval (hit@k, MRR, image-weight sweep), the profile agent, end-to-end behaviour and hallucination rate, with an LLM judge that is itself calibrated against hand labels. Highlights: images lift visual-description search from MRR 0.52 to 0.90; a grounding check cuts invented facts from 27% to 7%. See the [evaluation report](docs/evals/report.md).
 - **Observability with Langfuse.** One trace per request with the LangGraph nodes, every LLM generation (tokens, latency), retrieval, geocoding, OSM, Tavily and MCP tool spans, grouped by session. Prompts can be served from Langfuse Prompt Management, thumbs up/down become scores, and user coordinates, secrets, emails and phone numbers are masked before anything leaves the process.
+- **Web app.** Next.js 16 on Vercel with GitHub sign-in, streamed agent steps, source-labelled cards, an OpenStreetMap map, opt-in geolocation and feedback. A backend-for-frontend keeps keys server-side and translates the API's events into the Vercel AI SDK protocol. Details: [web/README.md](web/README.md).
 - **Production-minded.** Typed settings, provider factory (Ollama / Bedrock), structured logs with request ids, SSE streaming API, HTTP caching and retries for public OSM servers, and a `pytest` suite with the LLM and the network faked.
 
 ## Architecture
@@ -39,6 +40,10 @@ flowchart TD
 ```
 
 ```
+Browser ── Next.js (Vercel) ── /api/chat BFF ──► FastAPI
+            GitHub sign-in      session, user id,
+            AI SDK useChat      SSE → UI message stream
+
 FastAPI  ── POST /chat (SSE)   ── LangGraph workflow ── Ollama | Bedrock
          ── POST /chat/sync
          ── POST /feedback (Langfuse score)
@@ -69,6 +74,7 @@ redteam/              promptfoo adversarial suite against the running API
 evals/                evaluation suites, datasets, recorded web fixtures, LLM judge
 notebooks/            the original step-by-step pipeline, 01 extraction -> 08 chatbot
 tests/                pytest suite
+web/                  Next.js frontend (Vercel): chat UI, map, sign-in, backend-for-frontend
 ```
 
 ## Quickstart
@@ -85,7 +91,10 @@ cp .env.example .env                                    # optional settings (Tav
 python scripts/download_data.py --with-images           # raw IBM datasets (see Credits)
 python scripts/build_index.py                           # vector index in .chroma/ (~1 min, CPU)
 
-uvicorn connoisseur.api:app --reload                    # http://localhost:8000/ui
+uvicorn connoisseur.api:app --reload                    # API + Gradio dev UI at http://localhost:8000/ui
+
+cd web && cp .env.example .env.local && npm install
+npm run dev -- -p 3001                                  # web app at http://localhost:3001
 ```
 
 Other entry points:

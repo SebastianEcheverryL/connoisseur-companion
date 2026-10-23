@@ -24,6 +24,7 @@ A request goes through the API (`/chat`), then an **input guardrail**, then a La
 Other controls:
 
 - **Authentication.** `API_KEY` protects `/chat` and `/feedback` (the Vercel backend-for-frontend will hold it and pass the signed-in user id); `MCP_TOKEN` protects the public MCP endpoint. Tokens are compared in constant time. `X-User-Id` is only trusted when the caller is authenticated.
+- **Web frontend (`web/`).** The browser only talks to a Next.js backend-for-frontend, which checks the GitHub session, forwards the signed-in user id for quotas and keeps the backend key server-side (on AWS: SigV4 with short-lived credentials from Vercel OIDC, no stored keys). Raw tool outputs (`evidence`) are stripped by the API before any client sees them. A strict Content Security Policy allows only the app's own scripts and images from OpenStreetMap tiles and GitHub avatars; `frame-ancestors 'none'` prevents clickjacking; `Permissions-Policy` allows geolocation for this site only. Answers are rendered as Markdown without raw HTML.
 - **Outbound requests.** The app only calls fixed endpoints (Nominatim, Overpass, Photon, Tavily, Ollama/Bedrock, Langfuse); it never fetches URLs taken from user input or web content, which rules out server-side request forgery through the agent.
 - **Fail policy.** If a guardrail model is unavailable, `GUARDRAIL_FAIL_CLOSED=true` blocks requests (recommended in production); the default for local development is to allow and log.
 

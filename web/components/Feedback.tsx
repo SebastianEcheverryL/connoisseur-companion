@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+import { ThumbIcon } from "@/components/icons";
+
 /** 👍 / 👎 on an answer: stored as a Langfuse score on that answer's trace (through the backend). */
 export default function Feedback({ traceId }: { traceId: string }) {
   const [sent, setSent] = useState<0 | 1 | null>(null);
@@ -16,20 +18,24 @@ export default function Feedback({ traceId }: { traceId: string }) {
   }
 
   return (
-    <div className="flex items-center gap-1 text-xs text-muted">
-      <span>Was this helpful?</span>
+    <div className="flex items-center gap-2">
       {([1, 0] as const).map((value) => (
         <button
           key={value}
           onClick={() => rate(value)}
           disabled={sent !== null}
           aria-label={value ? "Helpful" : "Not helpful"}
-          className={`rounded-md px-1.5 py-0.5 hover:bg-accent-soft disabled:cursor-default ${sent === value ? "bg-accent-soft" : ""}`}
+          aria-pressed={sent === value}
+          className={`grid h-[34px] w-[34px] place-items-center rounded-full border disabled:cursor-default ${
+            sent === value
+              ? "border-accent bg-accent-soft text-accent-text"
+              : "border-border bg-background text-muted hover:text-foreground"
+          }`}
         >
-          {value ? "👍" : "👎"}
+          <ThumbIcon size={15} down={value === 0} />
         </button>
       ))}
-      {sent !== null && <span>Thanks!</span>}
+      {sent !== null && <span className="text-xs text-muted">Thanks!</span>}
     </div>
   );
 }

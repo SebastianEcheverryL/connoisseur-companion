@@ -13,7 +13,7 @@ export default function PlacesMap({ places }: { places: Card[] }) {
   const bounds = points.map((p) => [p.coordinates.lat, p.coordinates.lon] as [number, number]);
 
   return (
-    <div className="h-64 overflow-hidden rounded-xl border border-border">
+    <div className="h-64 overflow-hidden rounded-[20px] border border-border">
       <MapContainer
         bounds={bounds.length > 1 ? bounds : undefined}
         center={bounds.length === 1 ? bounds[0] : undefined}
@@ -31,7 +31,7 @@ export default function PlacesMap({ places }: { places: Card[] }) {
             key={place.id}
             center={[place.coordinates.lat, place.coordinates.lon]}
             radius={8}
-            pathOptions={{ color: "#c2410c", fillColor: "#fb923c", fillOpacity: 0.85 }}
+            pathOptions={{ color: "#2e7d4f", fillColor: "#47c27a", fillOpacity: 0.85 }}
           >
             <Tooltip>{place.name}</Tooltip>
           </CircleMarker>

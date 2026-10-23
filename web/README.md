@@ -8,13 +8,14 @@ Next.js 16 frontend for the Connoisseur Companion API. It streams the agent's st
 
 ```
 Browser ──► Next.js (Vercel)
-              ├─ page: GitHub sign-in (Auth.js), chat UI (AI SDK useChat)
+              ├─ page: GitHub sign-in (Auth.js), chat UI (AI SDK useChat): sidebar with recent chats,
+              │        light/dark switch, agent steps, source-labelled cards, map, opt-in location
               └─ /api/chat  (backend-for-frontend)
                     ├─ checks the session
                     ├─ calls FastAPI /chat with the user id (per-user quotas)
                     │    · bearer API key, or SigV4 via Vercel OIDC on AWS (no stored AWS keys)
                     └─ translates the backend's SSE events into AI SDK UI message chunks
-                         step → data-step · answer → text + data-result (cards, route, trace id)
+                         step → data-step · answer → text + data-result (cards, route, profile, trace id)
 ```
 
 The browser never talks to the backend directly and never sees API keys, raw tool outputs or other users' data.
@@ -47,6 +48,7 @@ npm run build
 
 - **Backend-for-frontend**: keys and backend URLs stay on the server; the route forwards only text history (no UI data) within the API's limits.
 - **Location**: rounded to ~1 km in the browser, sent only while sharing is on, re-validated on the server.
+- **Recent chats**: kept in this browser's `localStorage` only (last 20), never sent to the server except as the history of the chat you continue.
 - **Headers**: a strict Content Security Policy (own scripts only; images from OSM tiles and GitHub avatars), `frame-ancestors 'none'`, `nosniff`, and `Permissions-Policy` that allows geolocation for this site only.
 - **Markdown**: rendered with `react-markdown` (no raw HTML); links open with `rel="noopener noreferrer"`.
 - **Auth**: production requires GitHub sign-in; the guest mode exists only in development.

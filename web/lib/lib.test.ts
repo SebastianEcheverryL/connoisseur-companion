@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { toUIChunks } from "./adapter";
+import { answerWithoutPickLists, isSpanish, shortPlace } from "./answer";
+import { chatTitle, upsertChat } from "./chats";
 import { parseCoordinates, roundCoordinates } from "./geo";
 import { toBackendRequest } from "./history";
 import { parseSSE } from "./sse";
@@ -42,26 +44,29 @@ describe("parseSSE", () => {
 
 describe("toUIChunks", () => {
   it("accumulates steps into one reconciled data part and maps the answer", () => {
-    const state = { steps: [] as string[], textId: "t1" };
+    const state = { steps: [] as string[], nodes: [] as string[], textId: "t1" };
     const first = [...toUIChunks({ type: "step", node: "profile", label: "Understanding" }, state)];
     const second = [...toUIChunks({ type: "step", node: "locate", label: "Locating" }, state)];
-    expect(first[0]).toEqual({ type: "data-step", id: "steps", data: { labels: ["Understanding"] } });
-    expect(second[0]).toEqual({ type: "data-step", id: "steps", data: { labels: ["Understanding", "Locating"] } });
+    expect(first[0]).toEqual({ type: "data-step", id: "steps", data: { labels: ["Understanding"], nodes: ["profile"] } });
+    expect(second[0]).toEqual({ type: "data-step", id: "steps", data: { labels: ["Understanding", "Locating"], nodes: ["profile", "locate"] } });
 
     const answer = [
       ...toUIChunks(
         { type: "answer", answer: "**Sushi World**", cards: [{ type: "restaurant", id: "osm:node/1", name: "Sushi World" }],
-          route: ["web"], trace_id: "abc", location: "Laureles", seconds: 12 },
+          route: ["web"], trace_id: "abc", location: "Laureles", seconds: 12, language: "Spanish",
+          understood: ["sushi"] },
         state,
       ),
     ];
     expect(answer.map((c) => c.type)).toEqual(["text-start", "text-delta", "text-end", "data-result"]);
     expect(answer[1]).toMatchObject({ delta: "**Sushi World**" });
-    expect(answer[3]).toMatchObject({ data: { traceId: "abc", location: "Laureles", route: ["web"] } });
+    expect(answer[3]).toMatchObject({
+      data: { traceId: "abc", location: "Laureles", route: ["web"], language: "Spanish", understood: ["sushi"] },
+    });
   });
 
   it("turns backend errors into a safe error chunk", () => {
-    const chunks = [...toUIChunks({ type: "error", message: "Something went wrong" }, { steps: [], textId: "t" })];
+    const chunks = [...toUIChunks({ type: "error", message: "Something went wrong" }, { steps: [], nodes: [], textId: "t" })];
     expect(chunks).toEqual([{ type: "error", errorText: "Something went wrong" }]);
   });
 });
@@ -100,5 +105,43 @@ describe("coordinates", () => {
     expect(parseCoordinates({ lat: 120, lon: 0 })).toBeNull();
     expect(parseCoordinates({ lat: "6", lon: 1 })).toBeNull();
     expect(parseCoordinates(null)).toBeNull();
+  });
+});
+
+describe("answerWithoutPickLists", () => {
+  it("drops the numbered pick lists and keeps the summary and notes", () => {
+    const text = [
+      "Three low-lit Italian rooms in Pasadena.",
+      "",
+      "**Restaurants**",
+      "1. **Osteria** (Italian) - _California guide_  ",
+      "   Candle-lit booths.",
+      "2. **Vino** (Wine bar)",
+      "",
+      "_Place data © OpenStreetMap contributors_",
+    ].join("\n");
+    expect(answerWithoutPickLists(text)).toBe("Three low-lit Italian rooms in Pasadena.\n\n_Place data © OpenStreetMap contributors_");
+  });
+
+  it("leaves answers without lists untouched", () => {
+    expect(answerWithoutPickLists("¿Dónde estás?")).toBe("¿Dónde estás?");
+  });
+});
+
+describe("small UI helpers", () => {
+  it("shortens place names and detects Spanish", () => {
+    expect(shortPlace("Laureles, Comuna 11, Medellín, Colombia")).toBe("Laureles, Comuna 11");
+    expect(isSpanish("Spanish")).toBe(true);
+    expect(isSpanish("English")).toBe(false);
+    expect(isSpanish(null)).toBe(false);
+  });
+
+  it("titles a chat from its first user message and keeps the newest first", () => {
+    const m = (text: string): ChatMessage => ({ id: text, role: "user", parts: [{ type: "text", text }] });
+    expect(chatTitle([])).toBe("New chat");
+    expect(chatTitle([m("x".repeat(60))])).toHaveLength(41);
+    const a = { id: "a", title: "A", messages: [], updatedAt: 1 };
+    const b = { id: "b", title: "B", messages: [], updatedAt: 2 };
+    expect(upsertChat([a, b], { ...b, title: "B2" }).map((c) => c.title)).toEqual(["B2", "A"]);
   });
 });

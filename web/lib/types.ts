@@ -16,6 +16,11 @@ export type Card = {
   price_range?: number;
   url?: string;
   coordinates?: { lat: number; lon: number };
+  // Recipes: ingredients and the similarity of each modality behind the fused score
+  ingredients?: string[];
+  score?: number;
+  text_score?: number;
+  image_score?: number;
 };
 
 /** Events emitted by the backend's POST /chat (server-sent events). */
@@ -27,6 +32,8 @@ export type BackendEvent =
       cards: Card[];
       route: string[];
       intent?: string | null;
+      language?: string | null;
+      understood?: string[];
       location?: string | null;
       seconds?: number;
       trace_id?: string | null;
@@ -36,16 +43,22 @@ export type BackendEvent =
 
 /** Custom data parts streamed to the UI next to the assistant's text. */
 export type ChatDataParts = {
-  step: { labels: string[] };
+  step: { labels: string[]; nodes: string[] };
   result: {
     cards: Card[];
     route: string[];
     traceId: string | null;
+    intent: string | null;
+    language: string | null;
+    understood: string[];
     location: string | null;
     seconds: number | null;
   };
 };
 
-export type ChatMessage = UIMessage<never, ChatDataParts>;
+/** Per-message metadata set by the UI: a user turn re-sent after sharing the location shows as a pill. */
+export type ChatMetadata = { locationShared?: boolean };
+
+export type ChatMessage = UIMessage<ChatMetadata, ChatDataParts>;
 
 export type Coordinates = { lat: number; lon: number };

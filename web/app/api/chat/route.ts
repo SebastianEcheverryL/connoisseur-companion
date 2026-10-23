@@ -21,15 +21,19 @@ export async function POST(req: Request) {
   const user = await currentUser();
   if (!user) return Response.json({ error: "Sign in required" }, { status: 401 });
 
-  const body = (await req.json().catch(() => null)) as { messages?: ChatMessage[]; location?: unknown } | null;
+  const body = (await req.json().catch(() => null)) as
+    | { id?: unknown; messages?: ChatMessage[]; location?: unknown }
+    | null;
   const { message, history } = toBackendRequest(body?.messages ?? []);
   if (!message) return Response.json({ error: "Empty message" }, { status: 400 });
 
   const location = parseCoordinates(body?.location);
+  // One Langfuse session per conversation (the chat id from useChat), falling back to the user
+  const sessionId = (typeof body?.id === "string" && body.id ? body.id : user.id).replace(/[^\w-]/g, "-").slice(0, 64);
   const backend = await backendFetch("/chat", {
     userId: user.id,
     signal: req.signal,
-    body: { message, history, location, session_id: user.id.replace(/[^\w-]/g, "-").slice(0, 64) },
+    body: { message, history, location, session_id: sessionId },
   }).catch((error: unknown) => {
     console.error("backend unreachable", error);
     return null;
@@ -46,7 +50,7 @@ export async function POST(req: Request) {
         });
         return;
       }
-      const state = { steps: [] as string[], textId: generateId() };
+      const state = { steps: [] as string[], nodes: [] as string[], textId: generateId() };
       for await (const event of parseSSE(backend.body)) {
         for (const chunk of toUIChunks(event, state)) writer.write(chunk);
       }

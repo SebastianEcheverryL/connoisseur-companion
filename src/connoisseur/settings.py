@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     # Data
     data_dir: Path = Field(default=PROJECT_DIR / "data", validation_alias="CONNOISSEUR_DATA_DIR")
     chroma_dir: Path = Field(default=PROJECT_DIR / ".chroma")
+    # Read-only filesystems (AWS Lambda): the index baked into the image is copied to CHROMA_DIR (/tmp) on start
+    chroma_seed_dir: Path | None = None
 
     # LLM provider: Ollama locally and in CI, Bedrock on AWS
     llm_provider: Literal["ollama", "bedrock"] = "ollama"
@@ -100,6 +102,8 @@ class Settings(BaseSettings):
     guardrail_fail_closed: bool = False
     prompt_guard_repo: str = "gravitee-io/Llama-Prompt-Guard-2-22M-onnx"
     prompt_guard_file: str = "model.quant.onnx"
+    # Pinned commit: a changed upstream repository cannot silently swap the classifier
+    prompt_guard_revision: str = "da68d0f6023c7aeaf6b256eec549de295d5e8740"
     prompt_injection_threshold: float = Field(default=0.8, ge=0.0, le=1.0)
     llama_guard_model: str = "llama-guard3:1b"
     # Llama Guard hazard categories that do NOT block. S6 (specialised advice) covers allergy/diet questions.
@@ -115,10 +119,17 @@ class Settings(BaseSettings):
     request_timeout_s: float = 240.0
     daily_message_limit: int = 50
     per_minute_message_limit: int = 8
+    # DynamoDB table for quota counters (AWS): limits then hold across Lambda instances. Empty = in memory
+    quota_table: str | None = None
     # Optional shared secrets. API_KEY protects /chat and /feedback (the Vercel BFF will hold it);
     # MCP_TOKEN protects /mcp. Empty = open, for local development only.
     api_key: SecretStr | None = None
     mcp_token: SecretStr | None = None
+    # Honour X-User-Id without API_KEY. Only for deployments where the network layer already authenticates
+    # the caller, e.g. a Lambda Function URL with AWS_IAM auth that only the Vercel role may invoke.
+    trust_user_header: bool = False
+    # False serves only /health and /mcp: used by the optional public MCP function on AWS
+    expose_chat: bool = True
 
     # Optional local developer UI mounted on the API
     enable_dev_ui: bool = True
@@ -143,4 +154,10 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    # On AWS, secrets live in SSM Parameter Store, never in the function's environment or Terraform state
+    path = os.environ.get("SSM_PARAMETER_PATH")
+    if path:
+        from connoisseur.aws import load_ssm_parameters
+
+        load_ssm_parameters(path)
     return Settings()

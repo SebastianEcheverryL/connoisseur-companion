@@ -1,0 +1,24 @@
+# Copy to terraform.tfvars (gitignored) and adjust. Secrets never go here: they go to SSM.
+region      = "us-east-1"
+environment = "prod"
+
+# Email for budget alerts and CloudWatch alarms (confirm the subscription email AWS sends)
+alarm_email        = "you@example.com"
+monthly_budget_usd = 10
+
+# Vercel OIDC federation: team slug from Vercel > Settings > General, and the project name
+vercel_team_slug    = "your-team-slug"
+vercel_project_name = "connoisseur-companion"
+
+# GitHub Actions deploys from main through OIDC (no stored AWS keys)
+github_repository           = "SebastianEcheverryL/connoisseur-companion"
+create_github_oidc_provider = true # false if the account already has token.actions.githubusercontent.com
+
+# Optional public MCP endpoint (second function, /mcp only, bearer MCP_TOKEN)
+enable_public_mcp = false
+
+# Lambda size and abuse limits
+lambda_memory_mb         = 2048
+reserved_concurrency     = -1 # set e.g. 5 once the account concurrency quota is above 10
+daily_message_limit      = 30
+per_minute_message_limit = 6

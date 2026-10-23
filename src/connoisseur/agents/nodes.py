@@ -353,7 +353,7 @@ async def recommend(state: ChatState) -> dict:
     result = format_answer(picks, restaurants, recipes, ctx, location, allergies)
     # What the recommender was allowed to rely on: used by groundedness evaluations
     result["evidence"] = [json.dumps(_candidate_line(c), ensure_ascii=False) for c in restaurants] + [
-        r.model_dump_json(exclude={"score"}) for r in recipes
+        r.model_dump_json(exclude={"score", "text_score", "image_score"}) for r in recipes
     ] + [f"{s.title}: {s.content}" for s in snippets]
     return result
 

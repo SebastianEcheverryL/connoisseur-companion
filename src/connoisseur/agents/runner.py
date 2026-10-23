@@ -31,6 +31,14 @@ STEP_LABELS = {
 }
 
 
+def understood(context) -> list[str]:
+    """Preferences the profile agent extracted, shown back to the user as chips ("Understood: Italian, moody")."""
+    if context is None:
+        return []
+    items = [*context.cuisines, *context.dietary, context.vibe, context.budget, context.occasion]
+    return [item for item in items if item][:8]
+
+
 def initial_state(message: str, history: list[dict] | None, coords: Coordinates | None) -> dict:
     return {
         "message": message,
@@ -84,6 +92,8 @@ async def stream_chat(
             "cards": final.get("cards", []),
             "route": final.get("route", []),
             "intent": context.intent if context else None,
+            "language": context.language if context else None,
+            "understood": understood(context),
             "location": location.display_name if location else None,
             "seconds": elapsed,
             "trace_id": trace.trace_id,

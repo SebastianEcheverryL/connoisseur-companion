@@ -1,0 +1,59 @@
+# Connoisseur Companion · web
+
+Next.js 16 frontend for the Connoisseur Companion API. It streams the agent's steps, shows the answer with structured cards (each with its source), places on an OpenStreetMap map, an opt-in location button and 👍/👎 feedback.
+
+![Web UI](../docs/screenshots/web-ui.png)
+
+## How it fits
+
+```
+Browser ──► Next.js (Vercel)
+              ├─ page: GitHub sign-in (Auth.js), chat UI (AI SDK useChat)
+              └─ /api/chat  (backend-for-frontend)
+                    ├─ checks the session
+                    ├─ calls FastAPI /chat with the user id (per-user quotas)
+                    │    · bearer API key, or SigV4 via Vercel OIDC on AWS (no stored AWS keys)
+                    └─ translates the backend's SSE events into AI SDK UI message chunks
+                         step → data-step · answer → text + data-result (cards, route, trace id)
+```
+
+The browser never talks to the backend directly and never sees API keys, raw tool outputs or other users' data.
+
+## Run locally
+
+```bash
+# 1. the backend, from the repo root
+uvicorn connoisseur.api:app --reload            # http://localhost:8000
+
+# 2. the frontend
+cd web
+cp .env.example .env.local                      # defaults point to localhost:8000
+npm install
+npm run dev -- -p 3001                          # http://localhost:3001 (3000 is Langfuse)
+```
+
+Without GitHub credentials, `next dev` runs as a local guest. To test sign-in, create a GitHub OAuth App with callback `http://localhost:3001/api/auth/callback/github` and fill `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` and `AUTH_SECRET`.
+
+## Checks
+
+```bash
+npm run lint
+npm run typecheck      # next typegen + tsc
+npm test               # vitest: SSE parsing, event adapter, history limits, coordinate rounding
+npm run build
+```
+
+## Security choices
+
+- **Backend-for-frontend**: keys and backend URLs stay on the server; the route forwards only text history (no UI data) within the API's limits.
+- **Location**: rounded to ~1 km in the browser, sent only while sharing is on, re-validated on the server.
+- **Headers**: a strict Content Security Policy (own scripts only; images from OSM tiles and GitHub avatars), `frame-ancestors 'none'`, `nosniff`, and `Permissions-Policy` that allows geolocation for this site only.
+- **Markdown**: rendered with `react-markdown` (no raw HTML); links open with `rel="noopener noreferrer"`.
+- **Auth**: production requires GitHub sign-in; the guest mode exists only in development.
+
+## Deploy to Vercel (after the AWS backend exists, phase 6)
+
+1. Import the GitHub repo in Vercel and set **Root Directory** to `web`.
+2. Add the environment variables from `.env.example` (`BACKEND_AUTH=aws_iam`, `AWS_ROLE_ARN`, `AUTH_*`).
+3. In Vercel, enable **OIDC Federation** (Settings → Security); the AWS role trusts Vercel's OIDC issuer (created by Terraform in phase 6).
+4. Set the GitHub OAuth App callback to `https://<your-domain>/api/auth/callback/github`.

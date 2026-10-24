@@ -1,0 +1,82 @@
+name: Deploy
+
+# On main: build the image, scan it, push it to ECR and point the Lambda function(s) at it.
+# AWS access is through GitHub OIDC (role from `terraform output github_deploy_role_arn`): no stored keys.
+# Infrastructure changes are applied by hand with Terraform (see docs/tutorial-terraform-aws.md).
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - pyproject.toml
+      - src/**
+      - scripts/**
+      - data/*.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC token for AWS
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Skipped until the repository variables exist (Settings > Secrets and variables > Actions > Variables)
+    if: vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      FUNCTIONS: ${{ vars.LAMBDA_FUNCTIONS || 'connoisseur-prod-api' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-buildx-action@v3
+      - id: image
+        run: echo "uri=${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY || 'connoisseur-prod' }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          provenance: false # Lambda rejects multi-manifest images
+          load: true
+          tags: ${{ steps.image.outputs.uri }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Vulnerability scan before pushing
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ steps.image.outputs.uri }}
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - run: docker push "${{ steps.image.outputs.uri }}"
+      - name: Point the function(s) at the new image
+        run: |
+          for fn in $FUNCTIONS; do
+            aws lambda update-function-code --function-name "$fn" --image-uri "${{ steps.image.outputs.uri }}" >/dev/null
+            aws lambda wait function-updated-v2 --function-name "$fn"
+            echo "updated $fn"
+          done
+      - name: Smoke test GET /health on the IAM-protected URL (SigV4-signed)
+        run: |
+          # configure-aws-credentials already exported the role's temporary keys as environment variables
+          api="${FUNCTIONS%% *}"
+          url=$(aws lambda get-function-url-config --function-name "$api" --query FunctionUrl --output text)
+          for i in 1 2 3 4 5; do
+            body=$(curl -fsS --max-time 120 --aws-sigv4 "aws:amz:${AWS_REGION}:lambda" \
+              --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
+              -H "x-amz-security-token: ${AWS_SESSION_TOKEN}" "${url}health") && break
+            echo "attempt $i failed (cold start?)"; sleep 10
+          done
+          echo "$body"
+          echo "$body" | grep -q '"status":"ok"'

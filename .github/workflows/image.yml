@@ -1,0 +1,45 @@
+name: Image
+
+# Build the Lambda container image and scan it on pull requests that change what goes into it.
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - pyproject.toml
+      - src/**
+      - scripts/**
+      - data/*.json
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # Lambda only accepts a single-platform image manifest: no provenance attestations
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          provenance: false
+          load: true
+          tags: connoisseur-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: The image starts on a read-only filesystem, like on Lambda
+        run: |
+          docker run -d --name api --read-only --tmpfs /tmp:rw,exec,size=1g -p 8080:8080 connoisseur-api:${{ github.sha }}
+          for _ in $(seq 1 60); do curl -fsS localhost:8080/health && exit 0; sleep 2; done
+          docker logs api; exit 1
+      - name: Vulnerability scan (fail on fixable critical/high)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: connoisseur-api:${{ github.sha }}
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"

@@ -53,9 +53,11 @@ npm run build
 - **Markdown**: rendered with `react-markdown` (no raw HTML); links open with `rel="noopener noreferrer"`.
 - **Auth**: production requires GitHub sign-in; the guest mode exists only in development.
 
-## Deploy to Vercel (after the AWS backend exists, phase 6)
+## Deploy to Vercel
 
-1. Import the GitHub repo in Vercel and set **Root Directory** to `web`.
-2. Add the environment variables from `.env.example` (`BACKEND_AUTH=aws_iam`, `AWS_ROLE_ARN`, `AUTH_*`).
-3. In Vercel, enable **OIDC Federation** (Settings → Security); the AWS role trusts Vercel's OIDC issuer (created by Terraform in phase 6).
+Deploy the AWS backend first ([docs/tutorial-terraform-aws.md](../docs/tutorial-terraform-aws.md), section 13 covers Vercel).
+
+1. In Vercel, enable **OIDC Federation** in **Team** mode (Settings → Security). The role Terraform creates trusts `https://oidc.vercel.com/<team>` for this project's production environment only.
+2. Import the GitHub repo with the project name used in Terraform (`vercel_project_name`) and **Root Directory** `web`.
+3. Set the production environment variables: `BACKEND_URL` (`terraform output -raw api_url`, no trailing slash), `BACKEND_AUTH=aws_iam`, `AWS_ROLE_ARN` (`terraform output -raw vercel_role_arn`), `AWS_REGION`, `AUTH_SECRET`, `AUTH_GITHUB_ID` and `AUTH_GITHUB_SECRET`.
 4. Set the GitHub OAuth App callback to `https://<your-domain>/api/auth/callback/github`.

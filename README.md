@@ -63,13 +63,16 @@ src/connoisseur/
   security/           guardrails, prompt-injection screening, spotlighting, quotas, PII redaction
   server.py           FastMCP server: 5 read-only tools + culinary map resource
   llm.py              provider factory (Ollama / Bedrock)
-  settings.py         typed settings from env vars / .env
+  settings.py         typed settings from env vars / .env (and SSM Parameter Store on AWS)
+  aws.py              AWS-only helpers (SSM secrets loader)
   schemas.py          shared Pydantic contracts
   app.py              Gradio developer UI
   client.py           MCP client demo: tool calls, sampling and roots
   data_management.py  LLM structuring with a self-repair loop + console CRUD
-scripts/              download_data.py, build_index.py, sync_prompts.py
+scripts/              download_data.py, build_index.py, sync_prompts.py, warm_models.py
 infra/langfuse/       docker-compose for a local Langfuse
+infra/terraform/      AWS deployment: ECR, Lambda + Function URL, Bedrock Guardrail, DynamoDB, SSM, IAM/OIDC, CloudWatch, Budgets
+Dockerfile            Lambda container image (Lambda Web Adapter, index and ONNX models baked in)
 redteam/              promptfoo adversarial suite against the running API
 evals/                evaluation suites, datasets, recorded web fixtures, LLM judge
 notebooks/            the original step-by-step pipeline, 01 extraction -> 08 chatbot
@@ -135,12 +138,30 @@ pytest              # LLM and HTTP are faked; index tests run only if .chroma/ e
 ruff check src tests scripts
 ```
 
+## Deploy to AWS
+
+The backend runs on AWS Lambda as a container image behind a Function URL with IAM auth. Only the Vercel frontend can call it, using short-lived credentials from Vercel OIDC. The LLM is Amazon Nova Lite on Bedrock and the guardrails are Bedrock Guardrails. Quotas live in DynamoDB, secrets in SSM Parameter Store. Everything is Terraform in [infra/terraform/](infra/terraform/), and GitHub Actions deploys new images from `main` through OIDC, with no stored AWS keys.
+
+Step-by-step guide (in Spanish), with costs per resource, console checks, common errors and teardown: [docs/tutorial-terraform-aws.md](docs/tutorial-terraform-aws.md).
+
+```bash
+cd infra/terraform
+terraform init -backend-config=backend.hcl
+terraform apply -target=module.ecr                       # registry first
+docker buildx build --platform linux/amd64 --provenance=false -t <ecr-url>:bootstrap --push .
+terraform apply                                         # everything else
+```
+
+Expected cost for a demo: $1-5 a month, a few cents when idle.
+
 ## Technical notes
 
 - **Why required fields in LLM schemas.** With schema-constrained decoding, a schema whose fields are all optional lets a small model answer `{}`. The extraction and recommendation schemas make every field required (nullable where needed), which fixed misrouted intents with `llama3.1`.
 - **Why fixed help text.** An earlier version let the LLM answer greetings freely; it invented a restaurant with an address and a phone number. Help and refusals are now fixed text in English or Spanish.
 - **Why a deterministic web agent.** Letting an LLM pick tools based on web pages invites indirect prompt injection. The web branch always runs the same steps, and web text reaches the recommender wrapped as untrusted data.
-- **Why ONNX embeddings.** `fastembed` produces the same MiniLM and CLIP vectors as the notebooks without torch, which keeps the future Lambda container small.
+- **Why ONNX embeddings.** `fastembed` produces the same MiniLM and CLIP vectors as the notebooks without torch, which keeps the Lambda image at ~1.5 GB with the index and every model baked in.
+- **A Lambda-shaped container.** Lambda's filesystem is read-only except `/tmp`, so the image copies the baked Chroma index to `/tmp` at cold start and loads models offline (`HF_HUB_OFFLINE=1`). CI runs the image with `docker run --read-only` to catch anything that writes elsewhere.
+- **Who deploys what.** Terraform owns the infrastructure and is applied by hand; GitHub Actions only pushes images and updates the function code. The function ignores `image_uri` changes in Terraform, so an apply never rolls back a deploy.
 - **Why per-entity fusion.** The notebook ranked text and image hits as separate rows. The package merges them per recipe, so a recipe that matches by text and by image ranks higher.
 - **Being a good OSM citizen.** Nominatim calls are throttled to 1 per second, results are cached (geocoding for a month, places for a day), Overpass falls back across public mirrors with backoff, a circuit breaker skips Overpass for 5 minutes after it fails (Photon answers meanwhile), and answers credit OpenStreetMap contributors.
 

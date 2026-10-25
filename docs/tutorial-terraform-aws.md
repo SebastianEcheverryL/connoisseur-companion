@@ -158,15 +158,17 @@ En `terraform.tfvars` ajusta:
 Luego inicializa Terraform con el bucket remoto:
 
 ```powershell
-terraform init -backend-config=backend.hcl
+terraform init "-backend-config=backend.hcl"
 ```
+
+> **Por qué las comillas.** PowerShell parte en dos un argumento sin comillas que empieza con `-` y contiene un punto: Terraform recibiría `-backend-config=backend` y `.hcl` por separado y fallaría con *No positional arguments are expected*. Lo mismo pasa con `-target=module.ecr` más abajo.
 
 ## 7. Primer apply: el registro de imágenes
 
 La Lambda necesita que su imagen ya exista en ECR. Por eso primero creamos solo el repositorio:
 
 ```powershell
-terraform apply -target=module.ecr
+terraform apply "-target=module.ecr"
 ```
 
 Crea **un repositorio ECR** llamado `connoisseur-prod`:
@@ -185,12 +187,14 @@ La imagen se construye en dos etapas. La primera descarga los datos de IBM, cons
 cd ../..   # raíz del repo
 $account = aws sts get-caller-identity --query Account --output text
 $registry = "$account.dkr.ecr.us-east-1.amazonaws.com"
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $registry
+docker login --username AWS --password (aws ecr get-login-password --region us-east-1) $registry
 
 docker buildx build --platform linux/amd64 --provenance=false -t "$registry/connoisseur-prod:bootstrap" --push .
 ```
 
 La primera vez tarda de 10 a 20 minutos.
+
+- El login pasa el token como argumento. La forma habitual, `aws ecr get-login-password | docker login --password-stdin`, falla en Windows PowerShell 5.1 con `400 Bad Request`, porque el pipe cambia la codificación y agrega un salto de línea al token. En PowerShell 7 o en Git Bash el pipe sí funciona. Docker avisa que `--password` es inseguro, pero el token vence a las 12 horas.
 
 - `--platform linux/amd64` es la arquitectura de la Lambda.
 - `--provenance=false` es **obligatorio**. Sin esa opción Docker sube un índice con varias entradas y Lambda lo rechaza.

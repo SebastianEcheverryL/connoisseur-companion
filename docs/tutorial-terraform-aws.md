@@ -264,10 +264,12 @@ aws ssm put-parameter --name "$path/LANGFUSE_SECRET_KEY" --type SecureString --o
 aws ssm put-parameter --name "$path/TAVILY_API_KEY" --type SecureString --overwrite --value "tvly-..."
 ```
 
-El token MCP solo hace falta si activas el servidor MCP público del paso 15. Puedes generar uno aleatorio así:
+El token MCP solo hace falta si activas el servidor MCP público del paso 15. Puedes generar uno aleatorio de 64 caracteres hexadecimales con el generador criptográfico de .NET (`Get-Random` no sirve para secretos):
 
 ```powershell
-$token = -join ((48..57) + (97..122) | Get-Random -Count 40 | ForEach-Object { [char]$_ })
+$bytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$token = -join ($bytes | ForEach-Object { $_.ToString("x2") })
 aws ssm put-parameter --name "$path/MCP_TOKEN" --type SecureString --overwrite --value $token
 ```
 

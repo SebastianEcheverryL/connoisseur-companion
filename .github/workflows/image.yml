@@ -36,7 +36,7 @@ jobs:
           for _ in $(seq 1 60); do curl -fsS localhost:8080/health && exit 0; sleep 2; done
           docker logs api; exit 1
       - name: Vulnerability scan (fail on fixable critical/high)
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: connoisseur-api:${{ github.sha }}
           scanners: vuln

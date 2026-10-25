@@ -3,11 +3,13 @@
 useDefault = true
 
 [allowlist]
-description = "Local-only development credentials and fake keys used in tests"
+description = "Local-only development credentials, fake keys used in tests and env var references in docs"
 regexes = [
   '''pk-lf-local-dev''',
   '''sk-lf-local-dev''',
   '''tvly-abcdefghijklmnop''',
+  # curl --user in the deploy tutorial reads the keys from the environment, it does not contain them
+  '''\$\{env:AWS_ACCESS_KEY_ID\}:\$\{env:AWS_SECRET_ACCESS_KEY\}''',
 ]
 paths = [
   '''tests/''',

@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+/* Design tokens from the "Connoisseur Chat UI" design: a calm green palette, light and dark. */
+:root {
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #151a16;
+  --surface: #f4f7f3;
+  --surface-2: #e9efe7;
+  --muted: #5d665e;
+  --border: #e1e7df;
+  --accent: #2e7d4f;
+  --accent-soft: #e3f1e7;
+  --accent-text: #1d5534;
+  --on-accent: #ffffff;
+  --seg-active: #ffffff;
+  --stripe-1: #eef3ec;
+  --stripe-2: #e4ebe1;
+  --danger-soft: #fdecea;
+  --danger-text: #8a1c12;
+  --shadow: 0 1px 2px rgba(20, 40, 25, 0.06), 0 8px 24px rgba(20, 40, 25, 0.06);
+}
+
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --background: #0b0e0c;
+    --foreground: #edf2ee;
+    --surface: #131815;
+    --surface-2: #1d241f;
+    --muted: #98a59c;
+    --border: #232b25;
+    --accent: #47c27a;
+    --accent-soft: #163222;
+    --accent-text: #8fe0b0;
+    --on-accent: #04140a;
+    --seg-active: #2a342d;
+    --stripe-1: #151b17;
+    --stripe-2: #1b231e;
+    --danger-soft: #3a1512;
+    --danger-text: #f4b4ab;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.35);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #0b0e0c;
+  --foreground: #edf2ee;
+  --surface: #131815;
+  --surface-2: #1d241f;
+  --muted: #98a59c;
+  --border: #232b25;
+  --accent: #47c27a;
+  --accent-soft: #163222;
+  --accent-text: #8fe0b0;
+  --on-accent: #04140a;
+  --seg-active: #2a342d;
+  --stripe-1: #151b17;
+  --stripe-2: #1b231e;
+  --danger-soft: #3a1512;
+  --danger-text: #f4b4ab;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-on-accent: var(--on-accent);
+  --color-seg-active: var(--seg-active);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-text: var(--danger-text);
+  --shadow-soft: var(--shadow);
+  --font-sans: var(--font-figtree);
+  --font-display: var(--font-caprasimo);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-figtree), system-ui, sans-serif;
+}
+
+/* Skeleton shimmer for cards that are still being found */
+@keyframes pulse-soft {
+  50% { opacity: 0.55; }
+}
+.skeleton { animation: pulse-soft 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+/* Markdown answers */
+.prose-answer p { margin: 0.4rem 0; }
+.prose-answer p:first-child { margin-top: 0; }
+.prose-answer p:last-child { margin-bottom: 0; }
+.prose-answer ol, .prose-answer ul { margin: 0.4rem 0 0.4rem 1.25rem; }
+.prose-answer ol { list-style: decimal; }
+.prose-answer ul { list-style: disc; }
+.prose-answer li { margin: 0.25rem 0; }
+.prose-answer a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.prose-answer strong { font-weight: 600; }
+.prose-answer em { color: var(--muted); }

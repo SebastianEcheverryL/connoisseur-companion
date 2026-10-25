@@ -1,0 +1,6 @@
+# Copy to backend.hcl (gitignored) and use the bucket created by infra/terraform/bootstrap
+bucket       = "connoisseur-tfstate-123456789012"
+key          = "connoisseur/prod/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true # S3 native locking: no DynamoDB lock table needed

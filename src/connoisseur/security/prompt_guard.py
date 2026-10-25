@@ -73,6 +73,7 @@ def get_prompt_guard() -> PromptGuard | None:
 
         model_dir = snapshot_download(
             s.prompt_guard_repo,
+            revision=s.prompt_guard_revision,
             allow_patterns=[s.prompt_guard_file, "tokenizer.json", "config.json"],
             cache_dir=str(s.embedding_cache_dir) if s.embedding_cache_dir else None,
         )

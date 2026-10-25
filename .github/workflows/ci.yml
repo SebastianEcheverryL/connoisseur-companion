@@ -21,8 +21,54 @@ jobs:
       - run: ruff check src tests scripts redteam evals
       # LLM, guardrail models and web calls are faked; tests that need the built vector index are skipped
       - run: pytest -q
+      - name: Static security analysis (medium severity and above)
+        run: pip install bandit && bandit -r src -q -ll
       - name: Notebooks must be committed without outputs
         run: nbstripout --verify notebooks/*.ipynb
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  infra:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.17.0"
+      - run: terraform fmt -check -recursive
+      - name: Validate (no backend, no AWS credentials)
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+          terraform -chdir=bootstrap init -backend=false -input=false
+          terraform -chdir=bootstrap validate
+      - uses: terraform-linters/setup-tflint@v4
+      - run: tflint --init && tflint --recursive
+      # Every finding is either fixed or skipped inline with its reason (#checkov:skip=...)
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra/terraform
+          framework: terraform
+          quiet: true
 
   secrets:
     runs-on: ubuntu-latest

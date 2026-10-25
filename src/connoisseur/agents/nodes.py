@@ -353,7 +353,7 @@ async def recommend(state: ChatState) -> dict:
     result = format_answer(picks, restaurants, recipes, ctx, location, allergies)
     # What the recommender was allowed to rely on: used by groundedness evaluations
     result["evidence"] = [json.dumps(_candidate_line(c), ensure_ascii=False) for c in restaurants] + [
-        r.model_dump_json(exclude={"score"}) for r in recipes
+        r.model_dump_json(exclude={"score", "text_score", "image_score"}) for r in recipes
     ] + [f"{s.title}: {s.content}" for s in snippets]
     return result
 
@@ -403,14 +403,15 @@ def format_answer(picks, restaurants, recipes, ctx: UserContext, location, aller
         for i, (c, why) in enumerate(chosen_r, 1):
             meta = " · ".join(filter(None, [c.cuisine, c.location, _rating_text(c, ctx),
                                             "$" * c.price_range if c.price_range else None]))
-            lines.append(f"{i}. **{c.name}** ({meta}) - _{t(ctx, c.source)}_")
+            # Two trailing spaces = Markdown hard line break, so the reasoning starts on its own line
+            lines.append(f"{i}. **{c.name}** ({meta}) - _{t(ctx, c.source)}_" + ("  " if why else ""))
             if why:
                 lines.append(f"   {why}")
             cards.append({"type": "restaurant", "reasoning": why, **c.model_dump(exclude_none=True)})
     if chosen_p:
         lines.append(f"\n**{t(ctx, 'recipes')}**")
         for i, (r, why) in enumerate(chosen_p, 1):
-            lines.append(f"{i}. **{r.name}**" + (f" ({r.cuisine})" if r.cuisine else ""))
+            lines.append(f"{i}. **{r.name}**" + (f" ({r.cuisine})" if r.cuisine else "") + ("  " if why else ""))
             if why:
                 lines.append(f"   {why}")
             cards.append({"type": "recipe", "reasoning": why, **r.model_dump(exclude_none=True)})

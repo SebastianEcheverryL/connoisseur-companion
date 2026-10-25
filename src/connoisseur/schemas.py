@@ -93,6 +93,9 @@ class RecipeCandidate(BaseModel):
     cuisine: str | None = None
     ingredients: list[str] = Field(default_factory=list)
     score: float = 0.0
+    # Per-modality similarity behind the fused score, shown in the UI (never sent to the LLM)
+    text_score: float | None = None
+    image_score: float | None = None
 
 
 class Recommendation(BaseModel):

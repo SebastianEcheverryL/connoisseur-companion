@@ -71,6 +71,17 @@ def _token_ok(header: str | None, expected) -> bool:
     return scheme.lower() == "bearer" and hmac.compare_digest(token.encode(), expected.get_secret_value().encode())
 
 
+CHAT_PATHS = ("/chat", "/feedback", "/ui")
+
+
+@app.middleware("http")
+async def chat_routes_enabled(request: Request, call_next):
+    """EXPOSE_CHAT=false turns this deployment into an MCP-only server (the optional public function on AWS)."""
+    if not get_settings().expose_chat and request.url.path.startswith(CHAT_PATHS):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def mcp_auth(request: Request, call_next):
     """/mcp is open to any MCP client on the internet once deployed, so it requires MCP_TOKEN when set."""
@@ -88,10 +99,11 @@ def require_api_key(request: Request) -> None:
 
 
 def user_key(request: Request) -> str:
-    """Who to count quota against. The trusted Vercel BFF will send the signed-in user id
-    (X-User-Id is only honoured when API_KEY is set, i.e. when the caller is authenticated);
-    otherwise fall back to the client IP."""
-    if get_settings().api_key is not None and request.headers.get("x-user-id"):
+    """Who to count quota against. The trusted Vercel BFF sends the signed-in user id. X-User-Id is only
+    honoured when the caller is authenticated: by API_KEY, or by the platform (TRUST_USER_HEADER, set on
+    the AWS Lambda whose Function URL requires IAM auth). Otherwise fall back to the client IP."""
+    s = get_settings()
+    if (s.api_key is not None or s.trust_user_header) and request.headers.get("x-user-id"):
         return "user:" + request.headers["x-user-id"][:64]
     forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
     return "ip:" + (forwarded or (request.client.host if request.client else "unknown"))

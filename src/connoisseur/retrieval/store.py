@@ -1,4 +1,5 @@
 """Persistent ChromaDB collections for restaurants, recipes and recipe images."""
+import shutil
 from functools import lru_cache
 from pathlib import Path
 
@@ -56,7 +57,11 @@ class VectorStore:
 @lru_cache
 def get_store() -> VectorStore | None:
     """Return the store, or None when the index has not been built (run scripts/build_index.py)."""
-    path = get_settings().chroma_dir
+    s = get_settings()
+    path = s.chroma_dir
+    if not path.exists() and s.chroma_seed_dir and s.chroma_seed_dir.exists():
+        # Chroma opens its SQLite file read-write: on a read-only image, work on a copy in /tmp
+        shutil.copytree(s.chroma_seed_dir, path)
     if not path.exists():
         return None
     return VectorStore(path)

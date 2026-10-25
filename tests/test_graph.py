@@ -4,7 +4,7 @@ from langchain_core.messages import AIMessage
 
 from connoisseur.agents import nodes, tool_agent
 from connoisseur.agents.graph import build_graph
-from connoisseur.agents.runner import initial_state
+from connoisseur.agents.runner import initial_state, understood
 from connoisseur.places import osm
 from connoisseur.retrieval import service
 from connoisseur.schemas import (
@@ -15,6 +15,7 @@ from connoisseur.schemas import (
     Recommendation,
     RecommendationSet,
     ResolvedLocation,
+    UserContext,
 )
 
 LOCAL = [PlaceCandidate(id=f"dataset:{i}", name=f"Local {i}", source="dataset", score=1 - i / 10) for i in range(4)]
@@ -241,3 +242,15 @@ async def test_web_places_show_researched_rating_with_source(fakes, monkeypatch)
     out = await run()
     assert out["route"][-2:] == ["web", "ratings"]
     assert "⭐ 4.6/5 [Tripadvisor](https://tripadvisor.com/x), 1,234 reviews" in out["answer"]
+
+
+def test_understood_chips_list_extracted_preferences():
+    ctx = UserContext(intent="restaurant", cuisines=["Italian"], dietary=["vegan"], vibe="moody", budget="$$")
+    assert understood(ctx) == ["Italian", "vegan", "moody", "$$"]
+    assert understood(None) == []
+
+
+def test_recipe_modality_scores_stay_out_of_the_prompt():
+    recipe = RecipeCandidate(id="recipe:1", name="Soba", score=0.8, text_score=0.9, image_score=0.6)
+    assert "text_score" in recipe.model_dump()
+    assert "0.9" not in recipe.model_dump_json(exclude={"score", "text_score", "image_score"})

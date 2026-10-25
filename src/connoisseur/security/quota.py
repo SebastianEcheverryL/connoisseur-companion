@@ -1,7 +1,7 @@
 """Per-user message quotas: a daily cap plus a per-minute rate limit ("denial of wallet" protection).
 
-Locally counters live in memory (or the disk cache); on AWS the same interface will be backed by
-DynamoDB atomic counters with a TTL, so limits hold across Lambda instances.
+Locally counters live in memory; on AWS they are DynamoDB atomic counters with a TTL
+(QUOTA_TABLE), so limits hold across Lambda instances.
 """
 import time
 from collections.abc import Callable
@@ -43,6 +43,29 @@ class MemoryCounterStore:
             return value + 1
 
 
+class DynamoCounterStore:
+    """Atomic counters in DynamoDB: one item per key, `ADD count 1`, expired by DynamoDB's TTL on `expires_at`."""
+
+    def __init__(self, table: str, client=None):
+        if client is None:
+            import boto3
+
+            client = boto3.client("dynamodb")
+        self.table = table
+        self.client = client
+
+    def incr(self, key: str, ttl_s: int) -> int:
+        response = self.client.update_item(
+            TableName=self.table,
+            Key={"pk": {"S": key}},
+            UpdateExpression="ADD #count :one SET expires_at = if_not_exists(expires_at, :expires)",
+            ExpressionAttributeNames={"#count": "count"},
+            ExpressionAttributeValues={":one": {"N": "1"}, ":expires": {"N": str(int(time.time()) + ttl_s)}},
+            ReturnValues="UPDATED_NEW",
+        )
+        return int(response["Attributes"]["count"]["N"])
+
+
 class QuotaService:
     def __init__(self, store: CounterStore, clock: Callable[[], float] = time.time):
         self.store = store
@@ -66,4 +89,5 @@ class QuotaService:
 
 @lru_cache
 def get_quota_service() -> QuotaService:
-    return QuotaService(MemoryCounterStore())
+    table = get_settings().quota_table
+    return QuotaService(DynamoCounterStore(table) if table else MemoryCounterStore())

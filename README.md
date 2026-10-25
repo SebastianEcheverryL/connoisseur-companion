@@ -4,7 +4,7 @@ An AI assistant that recommends restaurants anywhere in the world and recipes to
 
 Everything runs locally with [Ollama](https://ollama.com): no paid LLM API is needed. The provider layer can switch to Amazon Bedrock for cloud deployment.
 
-![Connoisseur Companion chat UI](docs/screenshots/chat-ui.jpg)
+![Connoisseur Companion web UI](docs/screenshots/web-ui.png)
 
 ## Highlights
 
@@ -18,6 +18,7 @@ Everything runs locally with [Ollama](https://ollama.com): no paid LLM API is ne
 - **Agent security.** Input and output guardrails (Llama Prompt Guard 2 + English/Spanish injection rules + Llama Guard 3 locally, Bedrock Guardrails on AWS), untrusted tool and web content screened and isolated, read-only tools, per-user quotas, timeouts and bearer tokens. Threat model in [SECURITY.md](SECURITY.md), adversarial results in the [red-team report](docs/security/redteam-report.md).
 - **Measured, not assumed.** Evaluation suites for retrieval (hit@k, MRR, image-weight sweep), the profile agent, end-to-end behaviour and hallucination rate, with an LLM judge that is itself calibrated against hand labels. Highlights: images lift visual-description search from MRR 0.52 to 0.90; a grounding check cuts invented facts from 27% to 7%. See the [evaluation report](docs/evals/report.md).
 - **Observability with Langfuse.** One trace per request with the LangGraph nodes, every LLM generation (tokens, latency), retrieval, geocoding, OSM, Tavily and MCP tool spans, grouped by session. Prompts can be served from Langfuse Prompt Management, thumbs up/down become scores, and user coordinates, secrets, emails and phone numbers are masked before anything leaves the process.
+- **Web app.** Next.js 16 on Vercel with GitHub sign-in, streamed agent steps, source-labelled cards, an OpenStreetMap map, opt-in geolocation and feedback. A backend-for-frontend keeps keys server-side and translates the API's events into the Vercel AI SDK protocol. Details: [web/README.md](web/README.md).
 - **Production-minded.** Typed settings, provider factory (Ollama / Bedrock), structured logs with request ids, SSE streaming API, HTTP caching and retries for public OSM servers, and a `pytest` suite with the LLM and the network faked.
 
 ## Architecture
@@ -39,6 +40,10 @@ flowchart TD
 ```
 
 ```
+Browser ── Next.js (Vercel) ── /api/chat BFF ──► FastAPI
+            GitHub sign-in      session, user id,
+            AI SDK useChat      SSE → UI message stream
+
 FastAPI  ── POST /chat (SSE)   ── LangGraph workflow ── Ollama | Bedrock
          ── POST /chat/sync
          ── POST /feedback (Langfuse score)
@@ -58,17 +63,21 @@ src/connoisseur/
   security/           guardrails, prompt-injection screening, spotlighting, quotas, PII redaction
   server.py           FastMCP server: 5 read-only tools + culinary map resource
   llm.py              provider factory (Ollama / Bedrock)
-  settings.py         typed settings from env vars / .env
+  settings.py         typed settings from env vars / .env (and SSM Parameter Store on AWS)
+  aws.py              AWS-only helpers (SSM secrets loader)
   schemas.py          shared Pydantic contracts
   app.py              Gradio developer UI
   client.py           MCP client demo: tool calls, sampling and roots
   data_management.py  LLM structuring with a self-repair loop + console CRUD
-scripts/              download_data.py, build_index.py, sync_prompts.py
+scripts/              download_data.py, build_index.py, sync_prompts.py, warm_models.py
 infra/langfuse/       docker-compose for a local Langfuse
+infra/terraform/      AWS deployment: ECR, Lambda + Function URL, Bedrock Guardrail, DynamoDB, SSM, IAM/OIDC, CloudWatch, Budgets
+Dockerfile            Lambda container image (Lambda Web Adapter, index and ONNX models baked in)
 redteam/              promptfoo adversarial suite against the running API
 evals/                evaluation suites, datasets, recorded web fixtures, LLM judge
 notebooks/            the original step-by-step pipeline, 01 extraction -> 08 chatbot
 tests/                pytest suite
+web/                  Next.js frontend (Vercel): chat UI, map, sign-in, backend-for-frontend
 ```
 
 ## Quickstart
@@ -85,7 +94,10 @@ cp .env.example .env                                    # optional settings (Tav
 python scripts/download_data.py --with-images           # raw IBM datasets (see Credits)
 python scripts/build_index.py                           # vector index in .chroma/ (~1 min, CPU)
 
-uvicorn connoisseur.api:app --reload                    # http://localhost:8000/ui
+uvicorn connoisseur.api:app --reload                    # API + Gradio dev UI at http://localhost:8000/ui
+
+cd web && cp .env.example .env.local && npm install
+npm run dev -- -p 3001                                  # web app at http://localhost:3001
 ```
 
 Other entry points:
@@ -126,12 +138,30 @@ pytest              # LLM and HTTP are faked; index tests run only if .chroma/ e
 ruff check src tests scripts
 ```
 
+## Deploy to AWS
+
+The backend runs on AWS Lambda as a container image behind a Function URL with IAM auth. Only the Vercel frontend can call it, using short-lived credentials from Vercel OIDC. The LLM is Amazon Nova Lite on Bedrock and the guardrails are Bedrock Guardrails. Quotas live in DynamoDB, secrets in SSM Parameter Store. Everything is Terraform in [infra/terraform/](infra/terraform/), and GitHub Actions deploys new images from `main` through OIDC, with no stored AWS keys.
+
+Step-by-step guide (in Spanish), with costs per resource, console checks, common errors and teardown: [docs/tutorial-terraform-aws.md](docs/tutorial-terraform-aws.md).
+
+```bash
+cd infra/terraform
+terraform init -backend-config=backend.hcl
+terraform apply -target=module.ecr                       # registry first
+docker buildx build --platform linux/amd64 --provenance=false -t <ecr-url>:bootstrap --push .
+terraform apply                                         # everything else
+```
+
+Expected cost for a demo: $1-5 a month, a few cents when idle.
+
 ## Technical notes
 
 - **Why required fields in LLM schemas.** With schema-constrained decoding, a schema whose fields are all optional lets a small model answer `{}`. The extraction and recommendation schemas make every field required (nullable where needed), which fixed misrouted intents with `llama3.1`.
 - **Why fixed help text.** An earlier version let the LLM answer greetings freely; it invented a restaurant with an address and a phone number. Help and refusals are now fixed text in English or Spanish.
 - **Why a deterministic web agent.** Letting an LLM pick tools based on web pages invites indirect prompt injection. The web branch always runs the same steps, and web text reaches the recommender wrapped as untrusted data.
-- **Why ONNX embeddings.** `fastembed` produces the same MiniLM and CLIP vectors as the notebooks without torch, which keeps the future Lambda container small.
+- **Why ONNX embeddings.** `fastembed` produces the same MiniLM and CLIP vectors as the notebooks without torch, which keeps the Lambda image at ~1.5 GB with the index and every model baked in.
+- **A Lambda-shaped container.** Lambda's filesystem is read-only except `/tmp`, so the image copies the baked Chroma index to `/tmp` at cold start and loads models offline (`HF_HUB_OFFLINE=1`). CI runs the image with `docker run --read-only` to catch anything that writes elsewhere.
+- **Who deploys what.** Terraform owns the infrastructure and is applied by hand; GitHub Actions only pushes images and updates the function code. The function ignores `image_uri` changes in Terraform, so an apply never rolls back a deploy.
 - **Why per-entity fusion.** The notebook ranked text and image hits as separate rows. The package merges them per recipe, so a recipe that matches by text and by image ranks higher.
 - **Being a good OSM citizen.** Nominatim calls are throttled to 1 per second, results are cached (geocoding for a month, places for a day), Overpass falls back across public mirrors with backoff, a circuit breaker skips Overpass for 5 minutes after it fails (Photon answers meanwhile), and answers credit OpenStreetMap contributors.
 

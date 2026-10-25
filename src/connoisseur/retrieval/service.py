@@ -75,6 +75,8 @@ def search_recipes(ctx: UserContext, k: int = 5) -> list[RecipeCandidate]:
             cuisine=hit.metadata.get("cuisine") or None,
             ingredients=ingredients_by_id.get(hit.key, []),
             score=round(hit.fused, 4),
+            text_score=round(hit.text_score, 4),
+            image_score=round(hit.img_score, 4),
         )
         for hit in fused
     ]

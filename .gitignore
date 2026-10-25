@@ -44,3 +44,12 @@ redteam/results.json
 guia-del-proyecto.md
 # Raw evaluation outputs (summaries go to docs/evals/)
 evals/results/
+
+# Terraform: providers, local state and per-user config (the .terraform.lock.hcl files are committed)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+infra/terraform/backend.hcl
+crash.log

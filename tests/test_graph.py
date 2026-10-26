@@ -90,7 +90,7 @@ async def test_outside_california_goes_to_web_search(fakes):
     fakes["picks"] = RecommendationSet(summary="¡Mira!", restaurants=[
         Recommendation(candidate_id="osm:node/1", reasoning="Vegano.")], recipes=[])
     out = await run()
-    assert out["route"] == ["intent:restaurant", "location:elsewhere", "web"]
+    assert out["route"] == ["intent:restaurant", "location:elsewhere", "web", "web:osm"]
     assert "Green Bowl" in out["answer"]
     assert "OpenStreetMap" in out["answer"]
     assert "Restaurantes" in out["answer"]  # Spanish labels
@@ -109,7 +109,7 @@ async def test_california_with_too_few_local_results_adds_web(fakes):
     fakes["geocode"] = resolved("California")
     fakes["local"] = LOCAL[:1]
     out = await run()
-    assert out["route"][-2:] == ["local", "web"]
+    assert out["route"][-3:] == ["local", "web", "web:osm"]
 
 
 async def test_no_location_uses_guide_and_suggests_city(fakes):
@@ -207,7 +207,7 @@ async def test_near_me_with_browser_position_searches_the_web(fakes):
     fakes["profile"] = profile("restaurant", near_me=True)
     fakes["reverse"] = resolved("Antioquia")
     out = await run("sushi near me", coords=Coordinates(lat=6.2006, lon=-75.5636))
-    assert out["route"] == ["intent:restaurant", "location:elsewhere", "web"]
+    assert out["route"] == ["intent:restaurant", "location:elsewhere", "web", "web:osm"]
     assert fakes["web_called"]
 
 
@@ -240,7 +240,7 @@ async def test_web_places_show_researched_rating_with_source(fakes, monkeypatch)
     fakes["profile"] = profile("restaurant", location="El Poblado, Medellín")
     fakes["geocode"] = resolved("Antioquia")
     out = await run()
-    assert out["route"][-2:] == ["web", "ratings"]
+    assert out["route"][-3:] == ["web", "web:osm", "ratings"]
     assert "⭐ 4.6/5 [Tripadvisor](https://tripadvisor.com/x), 1,234 reviews" in out["answer"]
 
 

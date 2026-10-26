@@ -63,6 +63,8 @@ class Settings(BaseSettings):
         "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     ]
     overpass_timeout_s: float = 12.0
+    # Total time for every Overpass server together: past it, the web search moves on to Tavily
+    overpass_budget_s: float = 8.0
     # Fallback when every Overpass server is busy: Komoot's free OSM search with location bias
     photon_url: str = "https://photon.komoot.io/api/"
     # Nominatim's usage policy requires an identifying User-Agent: set OSM_USER_AGENT with a contact URL
@@ -81,6 +83,8 @@ class Settings(BaseSettings):
         "yelp.com",
         "foursquare.com",
     ]
+    # Place discovery when OpenStreetMap has nothing: one Tavily search over review and listing sites
+    web_discovery_results: int = 8
     web_search_radius_m: int = 2000
     web_max_places: int = 8
     http_timeout_s: float = 20.0

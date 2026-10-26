@@ -23,5 +23,10 @@ def sanitize(text: str) -> tuple[str, bool]:
 def wrap(text: str, source: str) -> str:
     """Screen and wrap untrusted text for inclusion in a prompt."""
     safe, _ = sanitize(text)
+    return tag(safe, source)
+
+
+def tag(safe: str, source: str) -> str:
+    """Wrap text that already went through `sanitize` (screening twice costs a model call each time)."""
     source = re.sub(r"[^\w.:-]", "", source)[:40]
     return f'<{TAG} source="{source}">\n{safe}\n</{TAG}>'

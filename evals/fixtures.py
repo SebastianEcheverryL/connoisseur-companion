@@ -65,7 +65,7 @@ async def fake_reverse_geocode(coords: Coordinates):
 
 
 async def fake_find_places(center, cuisines=None, dietary=None, radius_m=None, area_name=None, limit=None,
-                           query=None):
+                           query=None, photon_fallback=True):
     from connoisseur.places.osm import rank_places
 
     places = [p.model_copy(deep=True) for p in MEDELLIN_PLACES]

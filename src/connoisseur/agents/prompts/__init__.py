@@ -15,6 +15,7 @@ from connoisseur.settings import get_settings
 PROMPT_DIR = Path(__file__).parent
 PROMPT_NAMES = (
     "profile", "trend_analyst", "style_expert", "nutrition_expert", "recommender", "tool_agent", "grounding_check",
+    "web_places",
 )
 LANGFUSE_PREFIX = "connoisseur/"
 CACHE_TTL_S = 300

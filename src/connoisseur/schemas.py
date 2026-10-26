@@ -142,6 +142,22 @@ class RecipeCandidate(BaseModel):
     image_score: float | None = None
 
 
+class WebPlace(BaseModel):
+    name: str = Field(description="Restaurant name exactly as written in the search result")
+    cuisine: str | None = Field(description="Cuisine if the result says it, otherwise null")
+
+
+class ResultPlaces(BaseModel):
+    # Grouped by result: with a flat list, Nova Lite wrote one name per result and missed the rest
+    result: int = Field(description="Number of the search result")
+    places: list[WebPlace] = Field(description="Every restaurant this result names")
+
+
+class WebPlaceExtraction(BaseModel):
+    # Required on purpose (see ProfileExtraction): an empty object must not validate
+    results: list[ResultPlaces]
+
+
 class Recommendation(BaseModel):
     candidate_id: str = Field(description="id of one of the provided candidates")
     reasoning: str = Field(description="2-3 sentences explaining why it fits the user")

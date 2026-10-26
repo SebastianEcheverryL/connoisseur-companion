@@ -27,6 +27,7 @@ async def search(
     max_results: int = 5,
     include_domains: list[str] | None = None,
     ttl_s: int | None = None,
+    max_chars: int = MAX_SNIPPET_CHARS,
 ) -> list[WebSnippet]:
     """Run one basic Tavily search. Returns [] when no API key is configured or the call fails."""
     s = get_settings()
@@ -34,7 +35,7 @@ async def search(
         return []
     query = query.strip()[:300]
     cache = get_cache()
-    key = make_key("tavily", {"q": query.lower(), "n": max_results, "d": include_domains or []})
+    key = make_key("tavily", {"q": query.lower(), "n": max_results, "d": include_domains or [], "c": max_chars})
     if (hit := cache.get(key)) is not None:
         return [WebSnippet.model_validate(x) for x in hit]
 
@@ -55,7 +56,7 @@ async def search(
         WebSnippet(
             title=(r.get("title") or "")[:200],
             url=r.get("url") or "",
-            content=" ".join((r.get("content") or "").split())[:MAX_SNIPPET_CHARS],
+            content=" ".join((r.get("content") or "").split())[:max_chars],
         )
         for r in results
         if r.get("url")

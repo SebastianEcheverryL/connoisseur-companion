@@ -333,8 +333,8 @@ Remove-Item body.json
 
 ## 13. Conectar el frontend en Vercel
 
-1. **Activa OIDC.** En Vercel, entra a **Settings → Security → Secure backend access with OIDC federation**, actívalo y elige el modo **Team**. Así el emisor es `https://oidc.vercel.com/<tu-equipo>`, que es lo que espera el rol de Terraform.
-2. **Importa el proyecto.** Usa el mismo nombre que pusiste en `vercel_project_name` y pon `web` como **Root Directory**.
+1. **Importa el proyecto.** Usa el mismo nombre que pusiste en `vercel_project_name` y pon `web` como **Root Directory**. Si el primer despliegue falla por falta de variables, es normal.
+2. **Revisa el modo de OIDC.** Funciona en todos los planes, también en Hobby. La opción está en la configuración del **proyecto**, no en la del equipo (la sección Security del equipo tiene opciones solo para Enterprise). Abre el proyecto y entra a **Settings → Security → Secure backend access with OIDC federation**. Elige el modo **Team** y guarda. Así el emisor es `https://oidc.vercel.com/<tu-equipo>`, que es lo que espera el rol de Terraform.
 3. **Crea una OAuth App de GitHub** en **GitHub → Settings → Developer settings → OAuth Apps**. La *Authorization callback URL* es `https://<tu-dominio>.vercel.app/api/auth/callback/github`.
 4. **Variables de entorno** del proyecto, en el entorno *Production*:
 

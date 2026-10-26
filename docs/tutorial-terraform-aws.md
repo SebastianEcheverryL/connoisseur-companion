@@ -154,6 +154,7 @@ En `terraform.tfvars` ajusta:
 | `vercel_project_name` | El nombre del proyecto en Vercel |
 | `github_repository` | `TuUsuario/connoisseur-companion` |
 | `create_github_oidc_provider` | `false` si tu cuenta ya tiene el proveedor OIDC de GitHub |
+| `github_oidc_sub_prefix` | Corre `gh api repos/TuUsuario/connoisseur-companion/actions/oidc/customization/sub`. Si responde `"use_immutable_subject":true`, copia aquí su `sub_claim_prefix`. Si no, déjalo vacío |
 
 Luego inicializa Terraform con el bucket remoto:
 
@@ -418,6 +419,7 @@ Las alarmas envían correo cuando:
 | `AccessDeniedException` de Bedrock en los logs | El modelo o el perfil de inferencia no coinciden con la política IAM | `bedrock_model_id` y `bedrock_foundation_model` deben corresponder. Nova se habilita solo al primer uso. Los modelos de Anthropic piden un formulario aparte |
 | `EntityAlreadyExists: Provider with url https://token.actions.githubusercontent.com already exists` | Tu cuenta ya tenía el proveedor OIDC de GitHub | `create_github_oidc_provider = false` y aplica de nuevo |
 | En Vercel: `Not authorized to perform sts:AssumeRoleWithWebIdentity` | El *slug* del equipo, el nombre del proyecto o el entorno no coinciden con el rol | Revisa `vercel_team_slug` y `vercel_project_name`, y que OIDC esté en modo **Team**. El rol solo acepta `production` |
+| En GitHub Actions: `Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity` | El flujo no corrió en `main`, o el repo usa *immutable subjects*: GitHub manda `repo:Usuario@id/repo@id` y el rol espera `repo:Usuario/repo` | Lanza el flujo en `main`. Si el repo usa *immutable subjects*, pon su prefijo en `github_oidc_sub_prefix` (paso 6) y aplica |
 | `ImageTagAlreadyExistsException` | Las etiquetas son inmutables | Usa una etiqueta nueva, por ejemplo el hash del commit |
 | `Error acquiring the state lock` | Otro `terraform apply` quedó a medias | Si estás seguro de que no corre otro: `terraform force-unlock <ID>` |
 | `/health` responde `"tracing": false` | Las llaves de Langfuse siguen en `CHANGE_ME`, o la Lambda arrancó antes de cargarlas | Revisa el paso 10 y fuerza un arranque nuevo |

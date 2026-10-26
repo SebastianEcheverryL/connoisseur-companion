@@ -20,6 +20,7 @@ variable "vercel_team_slug" { type = string }
 variable "vercel_project_name" { type = string }
 variable "github_repository" { type = string }
 variable "create_github_oidc_provider" { type = bool }
+variable "github_oidc_sub_prefix" { type = string }
 
 locals {
   # A cross-region inference profile (us.*) routes to several regions: allow the profile and the
@@ -164,6 +165,8 @@ resource "aws_iam_role_policy" "vercel" {
 locals {
   github_enabled = var.github_repository != ""
   github_issuer  = "token.actions.githubusercontent.com"
+  # Repositories with immutable subjects send owner@id/repo@id instead of owner/repo
+  github_sub_prefix = var.github_oidc_sub_prefix != "" ? var.github_oidc_sub_prefix : "repo:${var.github_repository}"
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
@@ -200,7 +203,7 @@ data "aws_iam_policy_document" "github_trust" {
     condition {
       test     = "StringEquals"
       variable = "${local.github_issuer}:sub"
-      values   = ["repo:${var.github_repository}:ref:refs/heads/main"]
+      values   = ["${local.github_sub_prefix}:ref:refs/heads/main"]
     }
   }
 }
@@ -217,6 +220,12 @@ data "aws_iam_policy_document" "github" {
     actions   = ["ecr:GetAuthorizationToken"]
     resources = ["*"] # this action has no resource-level permissions
   }
+  # Authenticated pulls of public base images: anonymous pulls from shared runners hit the ECR Public data limit
+  statement {
+    sid       = "EcrPublicLogin"
+    actions   = ["ecr-public:GetAuthorizationToken", "sts:GetServiceBearerToken"]
+    resources = ["*"] # these actions have no resource-level permissions
+  }
   statement {
     sid = "PushImages"
     actions = [
@@ -230,7 +239,12 @@ data "aws_iam_policy_document" "github" {
     actions   = ["lambda:UpdateFunctionCode", "lambda:GetFunction", "lambda:GetFunctionConfiguration"]
     resources = var.deployable_function_arns
   }
-  # The smoke test calls GET /health on the IAM-protected Function URL
+  # The smoke test looks up the Function URL and calls GET /health on it
+  statement {
+    sid       = "SmokeTestUrlLookup"
+    actions   = ["lambda:GetFunctionUrlConfig"]
+    resources = [var.api_function_arn]
+  }
   statement {
     sid       = "SmokeTestApiUrl"
     actions   = ["lambda:InvokeFunctionUrl"]

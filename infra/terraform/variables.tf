@@ -108,6 +108,12 @@ variable "create_github_oidc_provider" {
   default     = true
 }
 
+variable "github_oidc_sub_prefix" {
+  description = "sub_claim_prefix from `gh api repos/OWNER/REPO/actions/oidc/customization/sub` when the repo uses immutable subjects. Empty = repo:owner/repo"
+  type        = string
+  default     = ""
+}
+
 # ---------- cost and alerts
 
 variable "alarm_email" {

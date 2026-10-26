@@ -82,6 +82,7 @@ locals {
     LANGFUSE_HOST             = var.langfuse_host
     OSM_USER_AGENT            = var.osm_user_agent
     QUOTA_TABLE               = module.dynamodb.name
+    STATE_TABLE               = module.dynamodb.name
     DAILY_MESSAGE_LIMIT       = tostring(var.daily_message_limit)
     PER_MINUTE_MESSAGE_LIMIT  = tostring(var.per_minute_message_limit)
   }

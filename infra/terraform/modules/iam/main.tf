@@ -70,6 +70,12 @@ data "aws_iam_policy_document" "lambda" {
     actions   = ["dynamodb:UpdateItem"]
     resources = [var.quota_table_arn]
   }
+  # Conversation and user memory live in the same table (keys conv:* and mem:*)
+  statement {
+    sid       = "ReadWriteMemory"
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
+    resources = [var.quota_table_arn]
+  }
   statement {
     sid = "ReadOwnSecrets"
     # Decryption with the AWS managed aws/ssm key needs no extra KMS permission.

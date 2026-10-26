@@ -1,15 +1,23 @@
 version: 2
 updates:
+  # Major versions of libraries are upgraded by hand: they change APIs (fastmcp, mcp, TypeScript, ESLint)
+  # and one breaking package would block the whole group.
   - package-ecosystem: pip
     directory: /
     schedule: { interval: weekly }
     groups:
       python: { patterns: ["*"] }
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /web
     schedule: { interval: weekly }
     groups:
       web: { patterns: ["*"] }
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }

@@ -4,6 +4,7 @@ The files come from the IBM "RAG and Agentic AI" course and are not redistribute
 Usage: python scripts/download_data.py [--with-images]
 """
 import argparse
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -16,6 +17,7 @@ FILES = {
 }
 IMAGES_ZIP = ("synthetic-recipe-images.zip", f"{BASE}/5_Rr6ohviItzucyWk6nkrw/synthetic-recipe-images.zip")
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+ATTEMPTS = 5
 
 
 def fetch(name: str, url: str) -> Path:
@@ -24,7 +26,20 @@ def fetch(name: str, url: str) -> Path:
         print(f"skip   {name} (already present)")
         return target
     print(f"fetch  {name}")
-    urllib.request.urlretrieve(url, target)
+    # Docker Desktop's DNS sometimes fails for a few seconds; retry with backoff instead of failing the build.
+    # Download to a temporary name so an interrupted transfer is never mistaken for a complete file.
+    partial = target.with_name(target.name + ".part")
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            urllib.request.urlretrieve(url, partial)
+            break
+        except OSError as exc:
+            if attempt == ATTEMPTS:
+                raise
+            delay = 2**attempt
+            print(f"retry  {name} in {delay}s ({exc})")
+            time.sleep(delay)
+    partial.replace(target)
     return target
 
 

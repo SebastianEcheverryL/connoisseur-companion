@@ -50,8 +50,9 @@ resource "aws_lambda_function" "this" {
   }
 
   lifecycle {
-    # New images are deployed by CI (aws lambda update-function-code): Terraform must not roll them back
-    ignore_changes = [image_uri]
+    # New images are deployed by CI (aws lambda update-function-code): Terraform must not roll them back.
+    # The description is changed by hand to force a cold start that reloads the SSM secrets.
+    ignore_changes = [image_uri, description]
   }
 }
 

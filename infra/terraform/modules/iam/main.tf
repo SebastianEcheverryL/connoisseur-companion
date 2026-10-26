@@ -71,9 +71,13 @@ data "aws_iam_policy_document" "lambda" {
   }
   statement {
     sid = "ReadOwnSecrets"
-    # Decryption with the AWS managed aws/ssm key needs no extra KMS permission
-    actions   = ["ssm:GetParametersByPath"]
-    resources = ["arn:aws:ssm:${var.region}:${var.account_id}:parameter${var.ssm_path}"]
+    # Decryption with the AWS managed aws/ssm key needs no extra KMS permission.
+    # IAM matches the path exactly as requested, and the app requests it with a trailing slash.
+    actions = ["ssm:GetParametersByPath"]
+    resources = [
+      "arn:aws:ssm:${var.region}:${var.account_id}:parameter${trimsuffix(var.ssm_path, "/")}",
+      "arn:aws:ssm:${var.region}:${var.account_id}:parameter${trimsuffix(var.ssm_path, "/")}/",
+    ]
   }
 }
 

@@ -215,6 +215,7 @@ resource "aws_iam_role" "github" {
 }
 
 data "aws_iam_policy_document" "github" {
+  #checkov:skip=CKV_AWS_107:Registry login tokens (ECR push, ECR Public pull) for a role that only main of this repo can assume
   statement {
     sid       = "EcrLogin"
     actions   = ["ecr:GetAuthorizationToken"]

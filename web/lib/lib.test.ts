@@ -5,6 +5,7 @@ import { answerWithoutPickLists, isSpanish, shortPlace } from "./answer";
 import { chatTitle, upsertChat } from "./chats";
 import { parseCoordinates, roundCoordinates } from "./geo";
 import { toBackendRequest } from "./history";
+import { memoryChips, toSessionId } from "./memory";
 import { parseSSE } from "./sse";
 import type { BackendEvent, ChatMessage } from "./types";
 
@@ -63,6 +64,15 @@ describe("toUIChunks", () => {
     expect(answer[3]).toMatchObject({
       data: { traceId: "abc", location: "Laureles", route: ["web"], language: "Spanish", understood: ["sushi"] },
     });
+  });
+
+  it("passes the remembered profile through, and null when the backend sends none", () => {
+    const memory = { location: "Laureles", dietary: ["vegan"], allergies: ["peanut"], from_saved: true };
+    const state = { steps: [] as string[], nodes: [] as string[], textId: "t" };
+    const withMemory = [...toUIChunks({ type: "answer", answer: "ok", cards: [], route: [], memory }, state)];
+    expect(withMemory[3]).toMatchObject({ data: { memory } });
+    const without = [...toUIChunks({ type: "answer", answer: "ok", cards: [], route: [] }, state)];
+    expect(without[3]).toMatchObject({ data: { memory: null } });
   });
 
   it("turns backend errors into a safe error chunk", () => {
@@ -143,5 +153,27 @@ describe("small UI helpers", () => {
     const a = { id: "a", title: "A", messages: [], updatedAt: 1 };
     const b = { id: "b", title: "B", messages: [], updatedAt: 2 };
     expect(upsertChat([a, b], { ...b, title: "B2" }).map((c) => c.title)).toEqual(["B2", "A"]);
+  });
+});
+
+describe("memory", () => {
+  it("lists allergies first, then diet, and the city only when it was saved earlier", () => {
+    const memory = { location: "Laureles, Medellín", dietary: ["vegan"], allergies: ["peanut", "kiwi"], from_saved: true };
+    expect(memoryChips(memory, true)).toEqual([
+      { label: "Alergia al maní", kind: "allergy" },
+      { label: "kiwi", kind: "allergy" },
+      { label: "vegan", kind: "diet" },
+      { label: "Ciudad guardada: Laureles, Medellín", kind: "place" },
+    ]);
+    expect(memoryChips({ ...memory, from_saved: false }, false).map((c) => c.label)).toEqual([
+      "Peanut allergy", "kiwi", "vegan",
+    ]);
+    expect(memoryChips(null, false)).toEqual([]);
+  });
+
+  it("builds the same session id the chat route sends", () => {
+    expect(toSessionId("abc_DEF-123")).toBe("abc_DEF-123");
+    expect(toSessionId("github:42/x")).toBe("github-42-x");
+    expect(toSessionId("x".repeat(80))).toHaveLength(64);
   });
 });

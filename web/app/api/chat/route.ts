@@ -4,6 +4,7 @@ import { toUIChunks } from "@/lib/adapter";
 import { backendFetch } from "@/lib/backend";
 import { parseCoordinates } from "@/lib/geo";
 import { toBackendRequest } from "@/lib/history";
+import { toSessionId } from "@/lib/memory";
 import { currentUser } from "@/lib/session";
 import { parseSSE } from "@/lib/sse";
 import type { ChatMessage } from "@/lib/types";
@@ -29,7 +30,7 @@ export async function POST(req: Request) {
 
   const location = parseCoordinates(body?.location);
   // One Langfuse session per conversation (the chat id from useChat), falling back to the user
-  const sessionId = (typeof body?.id === "string" && body.id ? body.id : user.id).replace(/[^\w-]/g, "-").slice(0, 64);
+  const sessionId = toSessionId(typeof body?.id === "string" && body.id ? body.id : user.id);
   const backend = await backendFetch("/chat", {
     userId: user.id,
     signal: req.signal,

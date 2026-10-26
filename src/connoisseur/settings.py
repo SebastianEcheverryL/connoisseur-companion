@@ -125,6 +125,10 @@ class Settings(BaseSettings):
     per_minute_message_limit: int = 8
     # DynamoDB table for quota counters (AWS): limits then hold across Lambda instances. Empty = in memory
     quota_table: str | None = None
+    # Conversation and user memory (AWS: the same DynamoDB table, other key prefixes). Empty = in memory
+    state_table: str | None = None
+    conversation_ttl_s: int = 7 * 24 * 3600
+    user_memory_ttl_s: int = 180 * 24 * 3600
     # Optional shared secrets. API_KEY protects /chat and /feedback (the Vercel BFF will hold it);
     # MCP_TOKEN protects /mcp. Empty = open, for local development only.
     api_key: SecretStr | None = None

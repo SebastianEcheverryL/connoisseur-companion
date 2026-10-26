@@ -7,7 +7,7 @@ from connoisseur.schemas import ProfileExtraction, RecommendationSet
 
 FULL = {"intent": "restaurant", "language": "Spanish", "location": "Medellín", "near_me": False,
         "cuisines": ["sushi"], "dietary": [], "vibe": None, "budget": None, "occasion": None,
-        "restaurant_name": None, "search_query": "casual sushi"}
+        "restaurant_name": None, "search_query": "casual sushi", "dropped_preferences": []}
 
 
 def test_null_words_become_empty_values():
@@ -84,3 +84,14 @@ async def test_schemas_without_from_partial_are_not_completed(monkeypatch):
     raw = AIMessage(content='{"summary": "Hi"}')  # restaurants and recipes missing: must not validate
     use_model(monkeypatch, {"raw": raw, "parsed": None, "parsing_error": ValueError("missing")})
     assert await nodes.structured_call(RecommendationSet, "system", "user") is None
+
+
+def test_placeholders_entities_and_quotes_are_cleaned():
+    # What Nova Lite answered in a real multi-turn test
+    profile = ProfileExtraction(**{**FULL, "location": "(user's location)", "vibe": "&quot;casual&quot;",
+                                   "occasion": "not specified", "dietary": ["not specified", "vegan"],
+                                   "search_query": "sushi (not specified) dinner"})
+    assert profile.location is None and profile.occasion is None
+    assert profile.vibe == "casual"
+    assert profile.dietary == ["vegan"]
+    assert profile.search_query == "sushi dinner"

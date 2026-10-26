@@ -11,11 +11,11 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from connoisseur import __version__, observability
+from connoisseur import __version__, memory, observability
 from connoisseur.agents.runner import run_chat, stream_chat
 from connoisseur.log import configure_logging, get_logger
 from connoisseur.retrieval.store import get_store
@@ -71,7 +71,7 @@ def _token_ok(header: str | None, expected) -> bool:
     return scheme.lower() == "bearer" and hmac.compare_digest(token.encode(), expected.get_secret_value().encode())
 
 
-CHAT_PATHS = ("/chat", "/feedback", "/ui")
+CHAT_PATHS = ("/chat", "/feedback", "/memory", "/ui")
 
 
 @app.middleware("http")
@@ -149,9 +149,10 @@ def _history(req: ChatRequest) -> list[dict]:
     return [turn.model_dump() for turn in req.history]
 
 
-async def _sse(req: ChatRequest) -> AsyncIterator[str]:
+async def _sse(req: ChatRequest, user: str) -> AsyncIterator[str]:
     try:
-        async for event in stream_chat(req.message, _history(req), req.location, session_id=req.session_id):
+        async for event in stream_chat(req.message, _history(req), req.location, session_id=req.session_id,
+                                       user_id=user):
             event = {k: v for k, v in event.items() if k not in INTERNAL_FIELDS}
             yield f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
     except Exception:  # report the failure to the client instead of cutting the stream
@@ -162,19 +163,28 @@ async def _sse(req: ChatRequest) -> AsyncIterator[str]:
 
 
 @app.post("/chat", dependencies=[Depends(require_api_key)])
-async def chat(req: ChatRequest, _: str = Depends(enforce_quota)):
+async def chat(req: ChatRequest, user: str = Depends(enforce_quota)):
     """Stream progress (`step`) and the final `answer` as server-sent events."""
     if req.session_id:
         structlog.contextvars.bind_contextvars(session_id=req.session_id)
-    return StreamingResponse(_sse(req), media_type="text/event-stream",
+    return StreamingResponse(_sse(req, user), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/chat/sync", dependencies=[Depends(require_api_key)])
-async def chat_sync(req: ChatRequest, _: str = Depends(enforce_quota)) -> dict:
+async def chat_sync(req: ChatRequest, user: str = Depends(enforce_quota)) -> dict:
     """Same as /chat but returns only the final answer as JSON (handy for scripts and evals)."""
-    result = await run_chat(req.message, _history(req), req.location, session_id=req.session_id)
+    result = await run_chat(req.message, _history(req), req.location, session_id=req.session_id, user_id=user)
     return {k: v for k, v in result.items() if k not in INTERNAL_FIELDS}
+
+
+@app.delete("/memory", dependencies=[Depends(require_api_key)])
+def forget_memory(request: Request,
+                  session_id: str | None = Query(default=None, max_length=64, pattern=r"^[\w-]+$")) -> dict:
+    """"Forget my preferences": deletes the user's saved memory and this conversation's state."""
+    memory.forget(user_key(request), session_id)
+    log.info("memory_forgotten", conversation=session_id is not None)
+    return {"status": "forgotten"}
 
 
 @app.post("/feedback", dependencies=[Depends(require_api_key)])

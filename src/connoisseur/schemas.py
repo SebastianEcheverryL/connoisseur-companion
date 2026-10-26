@@ -1,4 +1,6 @@
 """Typed contracts shared by the agents, the retrieval layer, the web tools and the API."""
+import html
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -47,27 +49,30 @@ class ProfileExtraction(BaseModel):
     occasion: str | None
     restaurant_name: str | None
     search_query: str
+    dropped_preferences: list[str] = Field(description="Diet items the user says no longer apply")
 
-    # Models sometimes write a missing value as the word "null" ("Mexican null" reached the place search)
+    # Models write missing values as words or placeholders: "Mexican null" reached the place search, and
+    # Nova Lite answered location="(user's location)" and vibe="&quot;casual&quot;"
     @field_validator("location", "vibe", "budget", "occasion", "restaurant_name", mode="before")
     @classmethod
     def _null_text(cls, value):
-        return None if _is_null(value) else value
+        return _clean(value)
 
-    @field_validator("cuisines", "dietary", mode="before")
+    @field_validator("cuisines", "dietary", "dropped_preferences", mode="before")
     @classmethod
     def _clean_list(cls, value):
-        if value is None or _is_null(value):
+        if value is None or isinstance(value, str) and _clean(value) is None:
             return []
         items = [value] if isinstance(value, str) else value
-        return [item.strip() for item in items if isinstance(item, str) and not _is_null(item)]
+        return [text for item in items if isinstance(item, str) and (text := _clean(item))]
 
     @field_validator("search_query", mode="before")
     @classmethod
     def _clean_query(cls, value):
         if not isinstance(value, str):
             return value
-        return " ".join(word for word in value.split() if not _is_null(word))
+        text = re.sub(r"\([^)]*\)", " ", html.unescape(value))
+        return " ".join(word for word in text.split() if _clean(word) is not None)
 
     @classmethod
     def from_partial(cls, data: dict) -> "ProfileExtraction | None":
@@ -83,17 +88,26 @@ class ProfileExtraction(BaseModel):
         return UserContext(**self.model_dump())
 
 
-NULL_WORDS = {"", "null", "none", "n/a"}
+NULL_WORDS = {"", "null", "none", "n/a", "unknown", "unspecified"}
+PLACEHOLDER = re.compile(r"^\(.*\)$|\bnot (specified|mentioned|provided|given)\b|\buser'?s (location|preference)",
+                         re.IGNORECASE)
 
 # Same fallback as when the profile call fails outright: treat the message as a restaurant search
 PROFILE_DEFAULTS = {
     "intent": "restaurant", "language": "English", "location": None, "near_me": False, "cuisines": [],
     "dietary": [], "vibe": None, "budget": None, "occasion": None, "restaurant_name": None, "search_query": "",
+    "dropped_preferences": [],
 }
 
 
-def _is_null(value) -> bool:
-    return isinstance(value, str) and value.strip().lower() in NULL_WORDS
+def _clean(value):
+    """A model's text value without entities and quotes, or None when it only stands for "nothing"."""
+    if not isinstance(value, str):
+        return value
+    text = html.unescape(value).strip().strip("\"'`“”‘’").strip()
+    if text.lower() in NULL_WORDS or PLACEHOLDER.search(text):
+        return None
+    return text
 
 
 class ResolvedLocation(BaseModel):

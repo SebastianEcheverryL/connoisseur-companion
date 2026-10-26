@@ -93,6 +93,7 @@ def test_mcp_only_mode_hides_chat_routes(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "expose_chat", False)
     assert client.post("/chat/sync", json={"message": "hi"}).status_code == 404
     assert client.post("/feedback", json={"trace_id": "0" * 32, "value": 1}).status_code == 404
+    assert client.delete("/memory").status_code == 404
     assert client.get("/health").status_code == 200
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
     ok = client.post("/mcp/", json=body, headers={"accept": "application/json, text/event-stream"})

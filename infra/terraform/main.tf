@@ -67,6 +67,7 @@ module "iam" {
   vercel_project_name         = var.vercel_project_name
   github_repository           = var.github_repository
   create_github_oidc_provider = var.create_github_oidc_provider
+  github_oidc_sub_prefix      = var.github_oidc_sub_prefix
 }
 
 locals {

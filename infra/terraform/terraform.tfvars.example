@@ -13,6 +13,7 @@ vercel_project_name = "connoisseur-companion"
 # GitHub Actions deploys from main through OIDC (no stored AWS keys)
 github_repository           = "SebastianEcheverryL/connoisseur-companion"
 create_github_oidc_provider = true # false if the account already has token.actions.githubusercontent.com
+github_oidc_sub_prefix      = "" # see variables.tf; repos with immutable subjects need repo:Owner@id/repo@id
 
 # Optional public MCP endpoint (second function, /mcp only, bearer MCP_TOKEN)
 enable_public_mcp = false

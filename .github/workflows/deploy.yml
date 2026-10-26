@@ -39,6 +39,12 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
+      # Base images come from public.ecr.aws: anonymous pulls from shared runners hit its data limit (429)
+      - uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+        env:
+          AWS_REGION: us-east-1 # ECR Public only issues tokens in us-east-1
       - uses: docker/setup-buildx-action@v3
       - id: image
         run: echo "uri=${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY || 'connoisseur-prod' }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"

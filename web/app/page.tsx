@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { githubConfigured, signIn, signOut } from "@/auth";
@@ -15,6 +16,8 @@ export default function Home() {
 
 /** Reads the session at request time (behind Suspense, as Cache Components requires). */
 async function Gate() {
+  // Request time only: ChatApp draws a random chat id (crypto.getRandomValues), which a prerender rejects
+  await connection();
   const user = await currentUser();
   if (!user) return <SignIn />;
   const account = user.guest ? null : (

@@ -1,7 +1,7 @@
 """Typed contracts shared by the agents, the retrieval layer, the web tools and the API."""
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 Intent = Literal["restaurant", "recipe", "both", "lookup", "clarification", "out_of_scope", "database"]
 Source = Literal["dataset", "osm", "web"]
@@ -48,8 +48,52 @@ class ProfileExtraction(BaseModel):
     restaurant_name: str | None
     search_query: str
 
+    # Models sometimes write a missing value as the word "null" ("Mexican null" reached the place search)
+    @field_validator("location", "vibe", "budget", "occasion", "restaurant_name", mode="before")
+    @classmethod
+    def _null_text(cls, value):
+        return None if _is_null(value) else value
+
+    @field_validator("cuisines", "dietary", mode="before")
+    @classmethod
+    def _clean_list(cls, value):
+        if value is None or _is_null(value):
+            return []
+        items = [value] if isinstance(value, str) else value
+        return [item.strip() for item in items if isinstance(item, str) and not _is_null(item)]
+
+    @field_validator("search_query", mode="before")
+    @classmethod
+    def _clean_query(cls, value):
+        if not isinstance(value, str):
+            return value
+        return " ".join(word for word in value.split() if not _is_null(word))
+
+    @classmethod
+    def from_partial(cls, data: dict) -> "ProfileExtraction | None":
+        """Recover an answer that omits fields (Bedrock Nova does): fill the gaps with neutral defaults
+        instead of dropping the whole profile. A field with an invalid value still fails."""
+        known = {key: value for key, value in data.items() if key in PROFILE_DEFAULTS}
+        try:
+            return cls.model_validate({**PROFILE_DEFAULTS, **known})
+        except ValidationError:
+            return None
+
     def to_context(self) -> UserContext:
         return UserContext(**self.model_dump())
+
+
+NULL_WORDS = {"", "null", "none", "n/a"}
+
+# Same fallback as when the profile call fails outright: treat the message as a restaurant search
+PROFILE_DEFAULTS = {
+    "intent": "restaurant", "language": "English", "location": None, "near_me": False, "cuisines": [],
+    "dietary": [], "vibe": None, "budget": None, "occasion": None, "restaurant_name": None, "search_query": "",
+}
+
+
+def _is_null(value) -> bool:
+    return isinstance(value, str) and value.strip().lower() in NULL_WORDS
 
 
 class ResolvedLocation(BaseModel):

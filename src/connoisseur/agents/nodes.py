@@ -117,14 +117,42 @@ def _transcript(state: ChatState) -> str:
 
 
 async def structured_call[T: BaseModel](schema: type[T], system: str, user: str) -> T | None:
-    """Ask the model for an instance of `schema`; returns None when the model's output is unusable."""
+    """Ask the model for an instance of `schema`; returns None when the model's output is unusable.
+
+    Schemas with a `from_partial` classmethod get a second chance: an answer that misses some fields
+    is completed with defaults instead of being thrown away.
+    """
     try:
-        model = get_chat_model(temperature=0).with_structured_output(schema)
-        result = await model.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
-        return result if isinstance(result, schema) else schema.model_validate(result)
+        model = get_chat_model(temperature=0).with_structured_output(schema, include_raw=True)
+        out = await model.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
+        parsed = out.get("parsed")
+        if parsed is not None:
+            return parsed if isinstance(parsed, schema) else schema.model_validate(parsed)
+        payload = _raw_payload(out.get("raw"))
+        recover = getattr(schema, "from_partial", None)
+        if recover and payload is not None and (result := recover(payload)) is not None:
+            log.info("structured_output_recovered", schema=schema.__name__,
+                     missing=sorted(set(schema.model_fields) - set(payload)))
+            return result
+        log.warning("structured_output_failed", schema=schema.__name__, error=str(out.get("parsing_error"))[:300])
+        return None
     except Exception as exc:  # noqa: BLE001 - small local models fail in many ways; degrade, don't crash
         log.warning("structured_output_failed", schema=schema.__name__, error=str(exc)[:300])
         return None
+
+
+def _raw_payload(raw) -> dict | None:
+    """The arguments the model produced: a tool call (Bedrock) or a JSON message body (Ollama)."""
+    if raw is None:
+        return None
+    if getattr(raw, "tool_calls", None):
+        args = raw.tool_calls[0].get("args")
+        return args if isinstance(args, dict) else None
+    try:
+        data = json.loads(message_text(raw.content))
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 async def text_call(system: str, user: str, temperature: float | None = None) -> str:

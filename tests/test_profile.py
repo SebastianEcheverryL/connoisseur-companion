@@ -80,7 +80,7 @@ async def test_structured_call_without_recovery_returns_none(monkeypatch, raw):
     assert await nodes.structured_call(ProfileExtraction, "system", "user") is None
 
 
-async def test_schemas_without_from_partial_are_not_completed(monkeypatch):
+async def test_a_recommendation_set_without_any_list_is_not_completed(monkeypatch):
     raw = AIMessage(content='{"summary": "Hi"}')  # restaurants and recipes missing: must not validate
     use_model(monkeypatch, {"raw": raw, "parsed": None, "parsing_error": ValueError("missing")})
     assert await nodes.structured_call(RecommendationSet, "system", "user") is None
@@ -95,3 +95,12 @@ def test_placeholders_entities_and_quotes_are_cleaned():
     assert profile.vibe == "casual"
     assert profile.dietary == ["vegan"]
     assert profile.search_query == "sushi dinner"
+
+
+async def test_a_recommendation_set_missing_one_list_is_completed(monkeypatch):
+    # Nova Lite left out "recipes" for a restaurant search, which dropped the picks it made
+    args = {"summary": "Aquí tienes", "restaurants": [{"candidate_id": "web:1", "reasoning": "Rico."}]}
+    raw = AIMessage(content="", tool_calls=[{"name": "RecommendationSet", "args": args, "id": "1"}])
+    use_model(monkeypatch, {"raw": raw, "parsed": None, "parsing_error": ValueError("recipes missing")})
+    picks = await nodes.structured_call(RecommendationSet, "system", "user")
+    assert picks.restaurants[0].candidate_id == "web:1" and picks.recipes == []

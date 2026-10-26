@@ -201,3 +201,16 @@ async def test_an_answer_without_names_is_retried_once(tavily_results):
     tavily_results["answers"] = {1: WebPlaceExtraction(results=[])}
     places = await web_places.discover_places(MEDELLIN, CTX)
     assert len(tavily_results["prompts"]) == 2 and [p.name for p in places] == ["Kai Sushi Bar"]
+
+
+async def test_discovery_searches_beyond_review_sites_when_they_have_nothing(tavily_results, monkeypatch):
+    domains_seen = []
+
+    async def search(query, max_results=5, include_domains=None, ttl_s=None, max_chars=500):
+        domains_seen.append(include_domains)
+        return [] if include_domains else list(RESULTS)
+
+    monkeypatch.setattr(tavily, "search", search)
+    places = await web_places.discover_places(MEDELLIN, CTX)
+    assert domains_seen[0] and domains_seen[1] is None
+    assert [p.name for p in places] == ["Kai Sushi Bar"]

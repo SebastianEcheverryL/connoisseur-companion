@@ -61,5 +61,6 @@ async def search(
         for r in results
         if r.get("url")
     ]
-    cache.set(key, [x.model_dump() for x in snippets], ttl_s or s.cache_ttl_s)
+    if snippets:  # an empty answer can be a hiccup: caching it hid real results for a day
+        cache.set(key, [x.model_dump() for x in snippets], ttl_s or s.cache_ttl_s)
     return snippets

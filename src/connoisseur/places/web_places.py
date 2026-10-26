@@ -85,8 +85,12 @@ async def discover_places(location: ResolvedLocation, ctx: UserContext) -> list[
         return []
     area = location.city or location.query
     # Listings put the names after a long header: keep more text than a rating lookup needs
-    found = await tavily.search(discovery_query(ctx, area), max_results=s.web_discovery_results,
+    query = discovery_query(ctx, area)
+    found = await tavily.search(query, max_results=s.web_discovery_results,
                                 include_domains=s.rating_domains or None, max_chars=DISCOVERY_CHARS)
+    if not found and s.rating_domains:
+        # Review sites had nothing (seen for "vegan sushi in Medellín"): food blogs and guides name places too
+        found = await tavily.search(query, max_results=s.web_discovery_results, max_chars=DISCOVERY_CHARS)
     results, blocks = [], []
     for result in found:
         safe, blocked = spotlight.sanitize(f"{result.title}\n{result.content}")
@@ -100,7 +104,7 @@ async def discover_places(location: ResolvedLocation, ctx: UserContext) -> list[
         return []
 
     listing = "\n".join(blocks)
-    user = f"City: {area}\nThe user wants: {discovery_query(ctx, area)}\n\n{listing}"
+    user = f"City: {area}\nThe user wants: {query}\n\n{listing}"
     for _ in range(2):  # Nova Lite now and then answers with no names at all (1 run in 7): one retry
         extraction = await structured_call(WebPlaceExtraction, load_prompt("web_places"), user)
         extracted = sum(len(group.places) for group in extraction.results) if extraction else 0

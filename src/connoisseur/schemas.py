@@ -182,3 +182,14 @@ class RecommendationSet(BaseModel):
     summary: str = Field(description="One friendly sentence introducing the picks")
     restaurants: list[Recommendation]
     recipes: list[Recommendation]
+
+    @classmethod
+    def from_partial(cls, data: dict) -> "RecommendationSet | None":
+        """Nova Lite leaves out the empty list ("recipes" for a restaurant search): fill it in. An answer
+        with neither list is still unusable."""
+        if "restaurants" not in data and "recipes" not in data:
+            return None
+        try:
+            return cls.model_validate({"summary": "", "restaurants": [], "recipes": [], **data})
+        except ValidationError:
+            return None

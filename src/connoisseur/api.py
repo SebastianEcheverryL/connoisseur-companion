@@ -2,6 +2,7 @@
 
 Run locally:  uvicorn connoisseur.api:app --reload   (dev UI at /ui, MCP at /mcp/)
 """
+import asyncio
 import hmac
 import json
 import time
@@ -54,8 +55,11 @@ mcp_app = mcp.http_app(path="/", stateless_http=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Validate the Langfuse keys in the background so a bad key is one clear log line, not a slower cold start
+    auth_check = asyncio.create_task(asyncio.to_thread(observability.check_credentials))
     async with mcp_app.lifespan(app):
         yield
+    await auth_check
     observability.flush()  # do not lose the last traces on shutdown
 
 
@@ -159,6 +163,8 @@ async def _sse(req: ChatRequest, user: str) -> AsyncIterator[str]:
         log.exception("chat_failed")
         error = {"type": "error", "message": "Something went wrong while answering. Please try again."}
         yield f"event: error\ndata: {json.dumps(error)}\n\n"
+    # The answer is already on screen; send the trace before the stream ends and Lambda freezes
+    await observability.aflush()
     yield "event: done\ndata: {}\n\n"
 
 
@@ -175,6 +181,7 @@ async def chat(req: ChatRequest, user: str = Depends(enforce_quota)):
 async def chat_sync(req: ChatRequest, user: str = Depends(enforce_quota)) -> dict:
     """Same as /chat but returns only the final answer as JSON (handy for scripts and evals)."""
     result = await run_chat(req.message, _history(req), req.location, session_id=req.session_id, user_id=user)
+    await observability.aflush()
     return {k: v for k, v in result.items() if k not in INTERNAL_FIELDS}
 
 
@@ -193,6 +200,7 @@ def feedback(req: FeedbackRequest) -> dict:
     if not observability.score(req.trace_id, "user_feedback", float(req.value), comment=req.comment,
                                data_type="BOOLEAN"):
         raise HTTPException(status_code=503, detail="Tracing is not configured.")
+    observability.flush()
     return {"status": "recorded"}
 
 

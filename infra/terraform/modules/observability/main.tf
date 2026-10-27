@@ -43,6 +43,49 @@ resource "aws_cloudwatch_log_metric_filter" "event" {
   }
 }
 
+# ---------------------------------------------------------------- saved Logs Insights queries (free)
+# CloudWatch -> Logs Insights -> Saved queries. Every app line is JSON, so its fields can be queried directly.
+
+locals {
+  api_log_group = aws_cloudwatch_log_group.function[var.api_function_name].name
+  agent_queries = {
+    "agent answers" = <<-EOT
+      fields @timestamp, seconds, session_id, trace_id, @message
+      | filter event = "chat_done"
+      | sort @timestamp desc
+      | limit 100
+    EOT
+    # Replace the session id (shown in the "agent answers" query) to follow one conversation step by step
+    "one conversation"    = <<-EOT
+      fields @timestamp, level, event, @message
+      | filter session_id = "PASTE_SESSION_ID"
+      | sort @timestamp asc
+    EOT
+    "errors and warnings" = <<-EOT
+      fields @timestamp, event, error, request_id, @message
+      | filter level in ["warning", "error", "critical"] or @message like /Traceback|Failed to export|Task timed out/
+      | sort @timestamp desc
+      | limit 200
+    EOT
+    "external tools"      = <<-EOT
+      filter event like /tavily|overpass|photon|nominatim|geocode|web_|places/
+      | stats count() as calls by event, level
+      | sort calls desc
+    EOT
+    "answer time"         = <<-EOT
+      filter event = "chat_done"
+      | stats count() as answers, avg(seconds) as avg_s, pct(seconds, 95) as p95_s, max(seconds) as max_s by bin(1h)
+    EOT
+  }
+}
+
+resource "aws_cloudwatch_query_definition" "agent" {
+  for_each        = local.agent_queries
+  name            = "${var.name}/${each.key}"
+  log_group_names = [local.api_log_group]
+  query_string    = each.value
+}
+
 # ---------------------------------------------------------------- alarms -> email
 
 resource "aws_sns_topic" "alarms" {
@@ -154,6 +197,20 @@ resource "aws_cloudwatch_dashboard" "this" {
         properties = {
           title   = "Security and abuse signals", region = var.region, stat = "Sum", period = 300, view = "timeSeries"
           metrics = [for metric in keys(local.app_events) : [local.namespace, metric]]
+        }
+      },
+      {
+        type = "log", x = 0, y = 12, width = 24, height = 8
+        properties = {
+          title = "Latest agent answers (trace_id opens the trace in Langfuse)", region = var.region, view = "table"
+          query = "SOURCE '${local.api_log_group}' | ${replace(trimspace(local.agent_queries["agent answers"]), "\n", " ")}"
+        }
+      },
+      {
+        type = "log", x = 0, y = 20, width = 24, height = 6
+        properties = {
+          title = "Errors and warnings", region = var.region, view = "table"
+          query = "SOURCE '${local.api_log_group}' | ${replace(trimspace(local.agent_queries["errors and warnings"]), "\n", " ")}"
         }
       },
     ]

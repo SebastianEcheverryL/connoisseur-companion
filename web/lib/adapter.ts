@@ -33,6 +33,7 @@ export function* toUIChunks(event: BackendEvent, state: AdapterState): Generator
           language: event.language ?? null,
           understood: event.understood ?? [],
           location: event.location ?? null,
+          memory: event.memory ?? null,
           seconds: event.seconds ?? null,
         },
       };

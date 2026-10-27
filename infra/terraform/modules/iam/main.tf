@@ -70,6 +70,12 @@ data "aws_iam_policy_document" "lambda" {
     actions   = ["dynamodb:UpdateItem"]
     resources = [var.quota_table_arn]
   }
+  # Conversation and user memory live in the same table (keys conv:* and mem:*)
+  statement {
+    sid       = "ReadWriteMemory"
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
+    resources = [var.quota_table_arn]
+  }
   statement {
     sid = "ReadOwnSecrets"
     # Decryption with the AWS managed aws/ssm key needs no extra KMS permission.
@@ -275,6 +281,54 @@ resource "aws_iam_role_policy" "github" {
   policy = data.aws_iam_policy_document.github.json
 }
 
+# ---------- pull requests: log in to ECR Public, nothing else ----------
+# The PR image build pulls the Lambda Web Adapter from public.ecr.aws, and anonymous pulls from shared
+# runners hit its data limit (429). Signed-in pulls do not. This role can only get that login token.
+
+data "aws_iam_policy_document" "github_pr_trust" {
+  count = local.github_enabled ? 1 : 0
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [local.github_provider_arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "${local.github_issuer}:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+    # Pull requests of this repository (GitHub gives no OIDC token to workflows from forks)
+    condition {
+      test     = "StringEquals"
+      variable = "${local.github_issuer}:sub"
+      values   = ["${local.github_sub_prefix}:pull_request"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_pr" {
+  count              = local.github_enabled ? 1 : 0
+  name               = "${var.name}-github-pr"
+  assume_role_policy = data.aws_iam_policy_document.github_pr_trust[0].json
+}
+
+data "aws_iam_policy_document" "github_pr" {
+  #checkov:skip=CKV_AWS_107:Only the ECR Public login token, to pull public base images; no access to account resources
+  statement {
+    sid       = "EcrPublicLogin"
+    actions   = ["ecr-public:GetAuthorizationToken", "sts:GetServiceBearerToken"]
+    resources = ["*"] # these actions have no resource-level permissions
+  }
+}
+
+resource "aws_iam_role_policy" "github_pr" {
+  count  = local.github_enabled ? 1 : 0
+  name   = "pull-public-images"
+  role   = aws_iam_role.github_pr[0].id
+  policy = data.aws_iam_policy_document.github_pr.json
+}
+
 output "lambda_role_arn" {
   value = aws_iam_role.lambda.arn
 }
@@ -285,4 +339,8 @@ output "vercel_role_arn" {
 
 output "github_role_arn" {
   value = local.github_enabled ? aws_iam_role.github[0].arn : null
+}
+
+output "github_pr_role_arn" {
+  value = local.github_enabled ? aws_iam_role.github_pr[0].arn : null
 }

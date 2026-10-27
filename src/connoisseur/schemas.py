@@ -1,7 +1,9 @@
 """Typed contracts shared by the agents, the retrieval layer, the web tools and the API."""
+import html
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 Intent = Literal["restaurant", "recipe", "both", "lookup", "clarification", "out_of_scope", "database"]
 Source = Literal["dataset", "osm", "web"]
@@ -47,9 +49,65 @@ class ProfileExtraction(BaseModel):
     occasion: str | None
     restaurant_name: str | None
     search_query: str
+    dropped_preferences: list[str] = Field(description="Diet items the user says no longer apply")
+
+    # Models write missing values as words or placeholders: "Mexican null" reached the place search, and
+    # Nova Lite answered location="(user's location)" and vibe="&quot;casual&quot;"
+    @field_validator("location", "vibe", "budget", "occasion", "restaurant_name", mode="before")
+    @classmethod
+    def _null_text(cls, value):
+        return _clean(value)
+
+    @field_validator("cuisines", "dietary", "dropped_preferences", mode="before")
+    @classmethod
+    def _clean_list(cls, value):
+        if value is None or isinstance(value, str) and _clean(value) is None:
+            return []
+        items = [value] if isinstance(value, str) else value
+        return [text for item in items if isinstance(item, str) and (text := _clean(item))]
+
+    @field_validator("search_query", mode="before")
+    @classmethod
+    def _clean_query(cls, value):
+        if not isinstance(value, str):
+            return value
+        text = re.sub(r"\([^)]*\)", " ", html.unescape(value))
+        return " ".join(word for word in text.split() if _clean(word) is not None)
+
+    @classmethod
+    def from_partial(cls, data: dict) -> "ProfileExtraction | None":
+        """Recover an answer that omits fields (Bedrock Nova does): fill the gaps with neutral defaults
+        instead of dropping the whole profile. A field with an invalid value still fails."""
+        known = {key: value for key, value in data.items() if key in PROFILE_DEFAULTS}
+        try:
+            return cls.model_validate({**PROFILE_DEFAULTS, **known})
+        except ValidationError:
+            return None
 
     def to_context(self) -> UserContext:
         return UserContext(**self.model_dump())
+
+
+NULL_WORDS = {"", "null", "none", "n/a", "unknown", "unspecified"}
+PLACEHOLDER = re.compile(r"^\(.*\)$|\bnot (specified|mentioned|provided|given)\b|\buser'?s (location|preference)",
+                         re.IGNORECASE)
+
+# Same fallback as when the profile call fails outright: treat the message as a restaurant search
+PROFILE_DEFAULTS = {
+    "intent": "restaurant", "language": "English", "location": None, "near_me": False, "cuisines": [],
+    "dietary": [], "vibe": None, "budget": None, "occasion": None, "restaurant_name": None, "search_query": "",
+    "dropped_preferences": [],
+}
+
+
+def _clean(value):
+    """A model's text value without entities and quotes, or None when it only stands for "nothing"."""
+    if not isinstance(value, str):
+        return value
+    text = html.unescape(value).strip().strip("\"'`“”‘’").strip()
+    if text.lower() in NULL_WORDS or PLACEHOLDER.search(text) or not re.search(r"\w", text):
+        return None  # also "." and "-", seen as vibe and occasion
+    return text
 
 
 class ResolvedLocation(BaseModel):
@@ -98,6 +156,22 @@ class RecipeCandidate(BaseModel):
     image_score: float | None = None
 
 
+class WebPlace(BaseModel):
+    name: str = Field(description="Restaurant name exactly as written in the search result")
+    cuisine: str | None = Field(description="Cuisine if the result says it, otherwise null")
+
+
+class ResultPlaces(BaseModel):
+    # Grouped by result: with a flat list, Nova Lite wrote one name per result and missed the rest
+    result: int = Field(description="Number of the search result")
+    places: list[WebPlace] = Field(description="Every restaurant this result names")
+
+
+class WebPlaceExtraction(BaseModel):
+    # Required on purpose (see ProfileExtraction): an empty object must not validate
+    results: list[ResultPlaces]
+
+
 class Recommendation(BaseModel):
     candidate_id: str = Field(description="id of one of the provided candidates")
     reasoning: str = Field(description="2-3 sentences explaining why it fits the user")
@@ -108,3 +182,14 @@ class RecommendationSet(BaseModel):
     summary: str = Field(description="One friendly sentence introducing the picks")
     restaurants: list[Recommendation]
     recipes: list[Recommendation]
+
+    @classmethod
+    def from_partial(cls, data: dict) -> "RecommendationSet | None":
+        """Nova Lite leaves out the empty list ("recipes" for a restaurant search): fill it in. An answer
+        with neither list is still unusable."""
+        if "restaurants" not in data and "recipes" not in data:
+            return None
+        try:
+            return cls.model_validate({"summary": "", "restaurants": [], "recipes": [], **data})
+        except ValidationError:
+            return None

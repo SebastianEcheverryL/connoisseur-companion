@@ -6,6 +6,7 @@ One review snippet carries a planted prompt injection to check that it is droppe
 from contextlib import contextmanager
 from unittest.mock import patch
 
+from connoisseur.places.tavily import WebSnippet
 from connoisseur.schemas import Coordinates, PlaceCandidate, ResolvedLocation
 
 PLANTED_INJECTION = (
@@ -65,7 +66,7 @@ async def fake_reverse_geocode(coords: Coordinates):
 
 
 async def fake_find_places(center, cuisines=None, dietary=None, radius_m=None, area_name=None, limit=None,
-                           query=None):
+                           query=None, photon_fallback=True):
     from connoisseur.places.osm import rank_places
 
     places = [p.model_copy(deep=True) for p in MEDELLIN_PLACES]
@@ -81,14 +82,57 @@ async def fake_enrich(places, area):
     return sorted(places, key=lambda p: p.score, reverse=True)
 
 
+# Tavily results recorded on 2026-10-26 for "best casual sushi restaurants in Medellín" (trimmed): used when
+# Overpass is down, so the place-discovery path (LLM extraction + grounding) runs on fixed input
+DISCOVERY_RESULTS = [
+    WebSnippet(
+        title="Top 7 sushi restaurants in Medellín, october 2026 - Restaurant Guru",
+        url="https://restaurantguru.com/sushi-Medellin-c98",
+        content="Top 7 sushi restaurants in Medellín. 172 sushi restaurants. ONI Nikkei - sushi medellin Sushi, "
+        "Restaurant. Deliciosa comida fusión peruana. WAN Restaurant Sushi, Japanese. Kuro Sushi Bar Sushi, "
+        "Restaurant, fresh rolls. NIKU COCINA NIKKEI Sushi, Peruvian. 123 Wok Laureles Sushi, Asian.",
+    ),
+    WebSnippet(
+        title="THE BEST Sushi in Medellin (Updated 2026) - Tripadvisor",
+        url="https://www.tripadvisor.com/Restaurants-g297478-c38-Medellin_Antioquia_Department.html",
+        content="Best Sushi Restaurants in Medellin, Antioquia Department. 1. TANOSHII Japanese, Sushi. "
+        "2. Senshi Sushi, Asian. Restaurants ranked by how well they match your selections and traveler reviews.",
+    ),
+    WebSnippet(
+        title="Kuro Sushi Bar, Medellín - Restaurant menu, prices and reviews",
+        url="https://restaurantguru.com/Kuro-Sushi-Bar-Medellin",
+        content="Kuro Sushi Bar in Laureles: rating 4.6 of 5, 840 reviews. Sushi rolls, ramen and sake.",
+    ),
+]
+
+
+def discovery_text() -> str:
+    """Every word the recorded web results contain: a web card whose name is not here was invented."""
+    return " ".join(f"{r.title} {r.content}" for r in DISCOVERY_RESULTS)
+
+
+async def fake_tavily_search(query, max_results=5, include_domains=None, ttl_s=None, max_chars=500):
+    return [r.model_copy() for r in DISCOVERY_RESULTS]
+
+
+async def no_places(*args, **kwargs):
+    return []
+
+
 @contextmanager
-def offline_web():
-    """Replace every network call of the web-search agent with the recorded data above."""
+def offline_web(overpass_down: bool = False):
+    """Replace every network call of the web-search agent with the recorded data above.
+
+    With `overpass_down`, OpenStreetMap finds nothing and Tavily answers with the recorded listings.
+    """
+    places = no_places if overpass_down else fake_find_places
     with (
         patch("connoisseur.places.osm.geocode", fake_geocode),
         patch("connoisseur.places.osm.reverse_geocode", fake_reverse_geocode),
-        patch("connoisseur.places.osm.find_places", fake_find_places),
+        patch("connoisseur.places.osm.find_places", places),
+        patch("connoisseur.places.osm.search_photon", no_places),
         patch("connoisseur.places.ratings.enrich_with_ratings", fake_enrich),
         patch("connoisseur.places.tavily.is_enabled", lambda: True),
+        patch("connoisseur.places.tavily.search", fake_tavily_search),
     ):
         yield

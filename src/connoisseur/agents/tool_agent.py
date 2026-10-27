@@ -3,6 +3,7 @@
 The MCP server runs in-process (FastMCP in-memory transport): no subprocess per message.
 """
 import asyncio
+import json
 
 from fastmcp import Client
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -29,6 +30,19 @@ def _history_messages(state: ChatState) -> list:
             continue
         messages.append(HumanMessage(content=content) if turn.get("role") == "user" else AIMessage(content=content))
     return messages
+
+
+def _previous_recommendations(state: ChatState) -> str:
+    """Places shown earlier, so "tell me more about the second one" works for web and OSM places too
+    (the guide's tools only know the curated dataset). Names and links can come from the web: tagged as data."""
+    cards = state.get("last_cards") or []
+    if not cards:
+        return ""
+    rows = [json.dumps(card.model_dump(exclude_none=True), ensure_ascii=False).replace("<", "").replace(">", "")
+            for card in cards]
+    return ("Recommendations already shown in this conversation, numbered per type as the user saw them. "
+            "Places from the guide (id starting with dataset:) can be looked up with the tools; for the others, "
+            "answer only from these details:\n" + spotlight.tag("\n".join(rows), source="previous_answer"))
 
 
 @traced("mcp_tool_call", as_type="tool")
@@ -61,10 +75,12 @@ async def tool_agent(state: ChatState) -> dict:
             for t in tools
         ]
         model = get_chat_model().bind_tools(tool_definitions)
-        messages = [SystemMessage(content=load_prompt("tool_agent")), *_history_messages(state),
-                    HumanMessage(content=state["message"])]
+        previous = _previous_recommendations(state)
+        system = load_prompt("tool_agent") + (f"\n\n{previous}" if previous else "")
+        messages = [SystemMessage(content=system), *_history_messages(state), HumanMessage(content=state["message"])]
         tools_used: list[str] = []
-        evidence: list[str] = []
+        # Facts about earlier picks may support the answer (the grounding check must accept them)
+        evidence: list[str] = [previous] if previous else []
 
         for _ in range(max_steps):
             response = await model.ainvoke(messages)

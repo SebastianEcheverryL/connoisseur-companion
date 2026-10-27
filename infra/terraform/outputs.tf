@@ -27,6 +27,11 @@ output "github_deploy_role_arn" {
   value       = module.iam.github_role_arn
 }
 
+output "github_pr_role_arn" {
+  description = "Repository variable AWS_PR_ROLE_ARN for the pull-request image build (ECR Public login only)"
+  value       = module.iam.github_pr_role_arn
+}
+
 output "ssm_parameter_path" {
   description = "Put the secrets here: aws ssm put-parameter --name <path>/NAME --type SecureString --overwrite --value ..."
   value       = local.ssm_path

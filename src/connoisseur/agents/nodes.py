@@ -5,11 +5,13 @@ import re
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
+from connoisseur import memory
+from connoisseur.agents import grounding
 from connoisseur.agents.prompts import load_prompt
 from connoisseur.agents.state import ChatState
 from connoisseur.llm import get_chat_model, message_text
 from connoisseur.log import get_logger
-from connoisseur.places import osm, ratings, tavily
+from connoisseur.places import osm, ratings, tavily, web_places
 from connoisseur.retrieval import service
 from connoisseur.schemas import PlaceCandidate, ProfileExtraction, RecommendationSet, UserContext
 from connoisseur.security import allergens, spotlight
@@ -113,18 +115,58 @@ def _transcript(state: ChatState) -> str:
     turns = (state.get("history") or [])[-HISTORY_TURNS:]
     lines = [f"{t.get('role', 'user')}: {t.get('content', '')}" for t in turns if t.get("content")]
     lines.append(f"user: {state['message']}")
-    return "\n".join(lines)
+    return _memory_block(state) + "\n".join(lines)
+
+
+def _memory_block(state: ChatState) -> str:
+    """What earlier turns established: it outlives the short transcript window."""
+    blocks = []
+    known = state.get("memory")
+    if known and (prefs := known.model_dump(exclude_none=True, exclude_defaults=True)):
+        blocks.append(f"Known preferences so far: {json.dumps(prefs, ensure_ascii=False)}")
+    if cards := state.get("last_cards"):
+        blocks.append("Previous recommendations, numbered as shown to the user:\n"
+                      + spotlight.tag(memory.describe_cards(cards), source="previous_answer"))
+    return "".join(f"{block}\n\n" for block in blocks) + ("Conversation:\n" if blocks else "")
 
 
 async def structured_call[T: BaseModel](schema: type[T], system: str, user: str) -> T | None:
-    """Ask the model for an instance of `schema`; returns None when the model's output is unusable."""
+    """Ask the model for an instance of `schema`; returns None when the model's output is unusable.
+
+    Schemas with a `from_partial` classmethod get a second chance: an answer that misses some fields
+    is completed with defaults instead of being thrown away.
+    """
     try:
-        model = get_chat_model(temperature=0).with_structured_output(schema)
-        result = await model.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
-        return result if isinstance(result, schema) else schema.model_validate(result)
+        model = get_chat_model(temperature=0).with_structured_output(schema, include_raw=True)
+        out = await model.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
+        parsed = out.get("parsed")
+        if parsed is not None:
+            return parsed if isinstance(parsed, schema) else schema.model_validate(parsed)
+        payload = _raw_payload(out.get("raw"))
+        recover = getattr(schema, "from_partial", None)
+        if recover and payload is not None and (result := recover(payload)) is not None:
+            log.info("structured_output_recovered", schema=schema.__name__,
+                     missing=sorted(set(schema.model_fields) - set(payload)))
+            return result
+        log.warning("structured_output_failed", schema=schema.__name__, error=str(out.get("parsing_error"))[:300])
+        return None
     except Exception as exc:  # noqa: BLE001 - small local models fail in many ways; degrade, don't crash
         log.warning("structured_output_failed", schema=schema.__name__, error=str(exc)[:300])
         return None
+
+
+def _raw_payload(raw) -> dict | None:
+    """The arguments the model produced: a tool call (Bedrock) or a JSON message body (Ollama)."""
+    if raw is None:
+        return None
+    if getattr(raw, "tool_calls", None):
+        args = raw.tool_calls[0].get("args")
+        return args if isinstance(args, dict) else None
+    try:
+        data = json.loads(message_text(raw.content))
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 async def text_call(system: str, user: str, temperature: float | None = None) -> str:
@@ -142,6 +184,13 @@ def _candidate_line(c: PlaceCandidate) -> dict:
     )
 
 
+def _allergies(state: ChatState) -> set[str]:
+    """Allergies said in any turn of the conversation (kept by memory), plus this message's."""
+    known = state.get("memory")
+    found = allergens.detect_allergies(state["message"], state["context"].dietary)
+    return found | set(known.allergies if known else [])
+
+
 def _preferences(ctx: UserContext) -> str:
     return ctx.model_dump_json(exclude={"search_query", "restaurant_name", "intent"}, exclude_none=True)
 
@@ -149,17 +198,37 @@ def _preferences(ctx: UserContext) -> str:
 # ---------- phase 1: profile and routing ----------
 
 async def profile(state: ChatState) -> dict:
-    """User Profile Generator + intent router: one structured LLM call."""
+    """User Profile Generator + intent router: one structured LLM call, then the remembered profile.
+
+    The LLM reads this message (with the known preferences and previous recommendations); code
+    decides what is kept from earlier turns (memory.merge_profile), so a failed or forgetful
+    extraction no longer loses the place or the allergies.
+    """
     extracted = await structured_call(ProfileExtraction, load_prompt("profile"), _transcript(state))
     if extracted is None:
         # Degrade gracefully: treat the message as a restaurant search
-        ctx = UserContext(intent="restaurant", search_query=state["message"][:200])
+        ctx = UserContext(intent="restaurant", language=guess_language(state["message"]),
+                          search_query=state["message"][:200])
     else:
         ctx = extracted.to_context()
+    named_location = ctx.location
+    known = memory.merge_profile(state.get("memory") or memory.Profile(), ctx, state["message"],
+                                 extracted.dropped_preferences if extracted else [])
+    route = [f"intent:{ctx.intent}"]
+    used_home = False
+    home = state.get("home_location")
+    if (home and not known.location and not ctx.near_me and not state.get("coords")
+            and ctx.intent in ("restaurant", "both")):
+        known = known.model_copy(update={"location": home})  # the city saved from an earlier chat
+        used_home = True
+        route.append("memory:home_location")
+    ctx = memory.apply_profile(ctx, known)
     if not ctx.search_query:
         ctx.search_query = service.build_query(ctx)
-    log.info("profile", intent=ctx.intent, has_location=bool(ctx.location or state.get("coords")))
-    return {"context": ctx, "route": [f"intent:{ctx.intent}"]}
+    log.info("profile", intent=ctx.intent, has_location=bool(ctx.location or state.get("coords")),
+             remembered=bool(state.get("memory") or state.get("last_cards")))
+    return {"context": ctx, "memory": known, "named_location": named_location, "used_home": used_home,
+            "route": route}
 
 
 def route_intent(state: ChatState) -> str:
@@ -169,8 +238,51 @@ def route_intent(state: ChatState) -> str:
     if intent == "recipe":
         return "retrieve_local"
     if intent == "lookup":
-        return "tool_agent"
+        card = _previous_card(state)
+        # The guide's tools only know the curated dataset: earlier web/OSM picks are recalled instead
+        return "recall" if card and not card.id.startswith("dataset:") else "tool_agent"
     return "respond"
+
+
+def _previous_card(state: ChatState) -> memory.CardRef | None:
+    """The earlier recommendation the user is asking about (the profile agent copies its name)."""
+    wanted = ratings.fold(state["context"].restaurant_name or "")
+    if not wanted:
+        return None
+    for card in state.get("last_cards") or []:
+        name = ratings.fold(card.name)
+        if name and (name == wanted or name in wanted or wanted in name):
+            return card
+    return None
+
+
+async def recall(state: ChatState) -> dict:
+    """Follow-up about an earlier pick that is not in the guide: its card details plus web results about it."""
+    ctx, card, s = state["context"], _previous_card(state), get_settings()
+    details = json.dumps(card.model_dump(exclude_none=True, exclude={"n"}), ensure_ascii=False)
+    evidence, results = [details], []
+    if tavily.is_enabled():
+        query = f'"{card.name}" {card.location or ""} restaurant reviews'
+        for r in await tavily.search(query, max_results=5, include_domains=s.rating_domains or None,
+                                     ttl_s=s.rating_cache_ttl_s):
+            if ratings.fold(card.name) not in ratings.fold(f"{r.title} {r.content}"):
+                continue  # a page about another place
+            safe, blocked = spotlight.sanitize(f"{r.title}: {r.content}")
+            if not blocked:
+                results.append(spotlight.tag(safe, source=ratings.site_name(r.url)))
+                evidence.append(f"{safe} ({r.url})")
+    user = (
+        f"Answer language: {ctx.language}\n"
+        f"User message: {state['message']}\n"
+        f"Place details: {spotlight.tag(details.replace('<', '').replace('>', ''), source='previous_answer')}\n"
+        f"Web results about it:\n" + ("\n".join(results) or "(none)")
+    )
+    answer = await text_call(load_prompt("recall"), user, temperature=0)
+    route = state["route"] + ["recall"] + (["recall:web"] if results else [])
+    if s.enable_grounding_check:
+        answer, revised = await grounding.enforce(state["message"], answer, evidence)
+        route.append("grounding:revised" if revised else "grounding:ok")
+    return {"answer": answer, "route": route, "evidence": evidence}
 
 
 async def respond(state: ChatState) -> dict:
@@ -220,7 +332,7 @@ async def retrieve_local(state: ChatState) -> dict:
     restaurants = service.search_restaurants(ctx) if ctx.intent in ("restaurant", "both") else []
     recipes = service.search_recipes(ctx, k=8) if ctx.intent in ("recipe", "both") else []
     route = state["route"] + ["local"]
-    allergies = allergens.detect_allergies(state["message"], ctx.dietary)
+    allergies = _allergies(state)
     if allergies and recipes:
         # Deterministic: recipes that list the allergen never reach the LLM
         safe = [r for r in recipes if not allergens.contains_allergen(r.ingredients, allergies)]
@@ -238,7 +350,11 @@ def route_after_local(state: ChatState) -> str:
 
 
 async def web_search(state: ChatState) -> dict:
-    """Web Search agent: OpenStreetMap for real places near the user, Tavily to research their ratings.
+    """Web Search agent: real places near the user, from the first source that has them.
+
+    1. OpenStreetMap (Overpass): tagged places around the point; Tavily then researches their ratings.
+    2. Tavily: restaurants named on review and listing sites, kept only if the cited result names them.
+    3. Photon: OpenStreetMap search by name, the last resort.
 
     It is deliberately deterministic: web content never decides which tool runs next, and ratings
     are parsed from review snippets with regular expressions, not generated by the LLM.
@@ -247,11 +363,17 @@ async def web_search(state: ChatState) -> dict:
     if location is None:
         return {"web_candidates": [], "web_snippets": [], "route": state["route"] + ["web:skipped"]}
 
-    places = await osm.find_places(
-        location.coordinates, cuisines=ctx.cuisines, dietary=ctx.dietary, area_name=location.city,
-        query=ctx.search_query,
-    )
+    search = {"cuisines": ctx.cuisines, "dietary": ctx.dietary, "area_name": location.city,
+              "query": ctx.search_query}
     route = state["route"] + ["web"]
+    if places := await osm.find_places(location.coordinates, photon_fallback=False, **search):
+        route.append("web:osm")
+    elif places := await web_places.discover_places(location, ctx):
+        route.append("web:tavily")
+    elif places := await osm.search_photon(location.coordinates, **search):
+        route.append("web:photon")
+    else:
+        route.append("web:none")
     if tavily.is_enabled() and places:
         places = await ratings.enrich_with_ratings(places, location.city or location.query)
         route.append("ratings")
@@ -344,12 +466,13 @@ async def recommend(state: ChatState) -> dict:
         f"{where}\n"
         f"User message: {state['message']}\n"
         f"User preferences: {_preferences(ctx)}\n"
+        f"User allergies: {', '.join(sorted(_allergies(state))) or 'none mentioned'}\n"
         f"Restaurant candidates: {json.dumps([_candidate_line(c) for c in restaurants], ensure_ascii=False)}\n"
         f"Recipe candidates: {json.dumps([r.model_dump(exclude={'score'}) for r in recipes])}\n"
         f"Expert notes:\n{experts or '(none)'}{web_block}"
     )
     picks = await structured_call(RecommendationSet, load_prompt("recommender"), user)
-    allergies = allergens.detect_allergies(state["message"], ctx.dietary)
+    allergies = _allergies(state)
     result = format_answer(picks, restaurants, recipes, ctx, location, allergies)
     # What the recommender was allowed to rely on: used by groundedness evaluations
     result["evidence"] = [json.dumps(_candidate_line(c), ensure_ascii=False) for c in restaurants] + [

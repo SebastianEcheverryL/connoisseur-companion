@@ -63,6 +63,8 @@ class Settings(BaseSettings):
         "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     ]
     overpass_timeout_s: float = 12.0
+    # Total time for every Overpass server together: past it, the web search moves on to Tavily
+    overpass_budget_s: float = 8.0
     # Fallback when every Overpass server is busy: Komoot's free OSM search with location bias
     photon_url: str = "https://photon.komoot.io/api/"
     # Nominatim's usage policy requires an identifying User-Agent: set OSM_USER_AGENT with a contact URL
@@ -81,6 +83,8 @@ class Settings(BaseSettings):
         "yelp.com",
         "foursquare.com",
     ]
+    # Place discovery when OpenStreetMap has nothing: one Tavily search over review and listing sites
+    web_discovery_results: int = 8
     web_search_radius_m: int = 2000
     web_max_places: int = 8
     http_timeout_s: float = 20.0
@@ -121,6 +125,10 @@ class Settings(BaseSettings):
     per_minute_message_limit: int = 8
     # DynamoDB table for quota counters (AWS): limits then hold across Lambda instances. Empty = in memory
     quota_table: str | None = None
+    # Conversation and user memory (AWS: the same DynamoDB table, other key prefixes). Empty = in memory
+    state_table: str | None = None
+    conversation_ttl_s: int = 7 * 24 * 3600
+    user_memory_ttl_s: int = 180 * 24 * 3600
     # Optional shared secrets. API_KEY protects /chat and /feedback (the Vercel BFF will hold it);
     # MCP_TOKEN protects /mcp. Empty = open, for local development only.
     api_key: SecretStr | None = None

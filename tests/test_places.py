@@ -1,4 +1,7 @@
 """OpenStreetMap and Tavily clients against recorded responses (respx), no real network."""
+import asyncio
+import time
+
 import httpx
 import pytest
 import respx
@@ -123,3 +126,45 @@ async def test_overpass_circuit_breaker_skips_servers_after_failure():
     calls_after_first = sum(r.call_count for r in routes)
     await osm.find_places(Coordinates(lat=6.25, lon=-75.59), cuisines=["sushi"])
     assert sum(r.call_count for r in routes) == calls_after_first  # second search went straight to Photon
+
+
+@respx.mock
+async def test_overpass_servers_share_one_time_budget(monkeypatch):
+    async def slow(request):
+        await asyncio.sleep(5)
+        return httpx.Response(200, json=OVERPASS)
+
+    monkeypatch.setattr(get_settings(), "overpass_budget_s", 0.2)
+    for url in get_settings().overpass_urls:
+        respx.post(url).mock(side_effect=slow)
+    start = time.perf_counter()
+    places = await osm.find_places(Coordinates(lat=6.2, lon=-75.56), photon_fallback=False)
+    assert places == [] and time.perf_counter() - start < 2
+
+
+@respx.mock
+async def test_find_places_can_leave_photon_to_the_caller():
+    for url in get_settings().overpass_urls:
+        respx.post(url).mock(return_value=httpx.Response(504))
+    photon = respx.get(get_settings().photon_url).mock(return_value=httpx.Response(200, json=PHOTON))
+    assert await osm.find_places(Coordinates(lat=6.2442, lon=-75.5812), photon_fallback=False) == []
+    assert not photon.called
+    places = await osm.search_photon(Coordinates(lat=6.2442, lon=-75.5812), cuisines=["sushi"])
+    assert places[0].name == "Sushi House"
+
+
+@respx.mock
+async def test_tavily_does_not_cache_an_empty_answer(monkeypatch):
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(get_settings(), "tavily_api_key", SecretStr("tvly-test"))
+    cache = {}
+    monkeypatch.setattr(tavily, "get_cache", lambda: type("C", (), {
+        "get": lambda self, k: cache.get(k), "set": lambda self, k, v, ttl: cache.__setitem__(k, v)})())
+    route = respx.post(get_settings().tavily_url).mock(side_effect=[
+        httpx.Response(200, json={"results": []}),
+        httpx.Response(200, json={"results": [{"title": "Kai", "url": "https://x.example", "content": "Kai"}]}),
+    ])
+    assert await tavily.search("vegan sushi medellin") == []
+    assert [s.title for s in await tavily.search("vegan sushi medellin")] == ["Kai"]  # asked again, not cached
+    assert route.call_count == 2 and len(cache) == 1

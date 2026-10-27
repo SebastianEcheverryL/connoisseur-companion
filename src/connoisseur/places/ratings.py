@@ -49,7 +49,7 @@ class PlaceRating(BaseModel):
     snippet: str = ""
 
 
-def _fold(text: str) -> str:
+def fold(text: str) -> str:
     """Lowercase and strip accents so "Café" matches "cafe"."""
     return "".join(c for c in unicodedata.normalize("NFKD", text.lower()) if not unicodedata.combining(c))
 
@@ -82,11 +82,11 @@ def extract_review_count(text: str) -> int | None:
 
 def rating_from_snippets(place_name: str, snippets: list[tavily.WebSnippet]) -> PlaceRating | None:
     """Combine ratings from snippets that mention the place; one value per source site."""
-    name = _fold(place_name)
+    name = fold(place_name)
     by_site: dict[str, tuple[float, tavily.WebSnippet]] = {}
     for snip in snippets:
         text = f"{snip.title} {snip.content}"
-        if name not in _fold(text):
+        if name not in fold(text):
             continue  # a rating for a different restaurant on the same page is worse than none
         rating = extract_rating(text)
         site = site_name(snip.url)
@@ -122,7 +122,7 @@ async def enrich_with_ratings(places: list[PlaceCandidate], area: str | None) ->
     s = get_settings()
     if not tavily.is_enabled() or not places:
         return places
-    top = places[: s.rating_lookups]
+    top = [p for p in places if p.rating is None][: s.rating_lookups]  # web finds may come rated already
     results = await asyncio.gather(*(research_place(p, area) for p in top), return_exceptions=True)
 
     found = 0

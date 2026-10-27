@@ -65,6 +65,14 @@ def detect_allergies(text: str, dietary: list[str] | None = None) -> set[str]:
     }
 
 
+def is_allergen_name(item: str) -> bool:
+    """True for "peanut" or "maní" (an allergy the model filed as a diet), False for "peanut-free" or "vegan"."""
+    text = item.lower()
+    if re.search(r"free|\bsin\b|libre", text):
+        return False
+    return any(re.search(rf"\b{re.escape(w)}\b", text) for words in ALLERGY_MENTIONS.values() for w in words)
+
+
 def contains_allergen(ingredients: list[str], allergies: set[str]) -> bool:
     text = " ".join(ingredients).lower()
     return any(word in text for allergy in allergies for word in ALLERGEN_INGREDIENTS.get(allergy, ()))

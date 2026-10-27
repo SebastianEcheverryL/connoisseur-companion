@@ -83,6 +83,7 @@ async def geocode(query: str) -> ResolvedLocation | None:
 
     items = await _nominatim_get("/search", {"q": query, "addressdetails": 1, "limit": 1})
     if not items:
+        log.info("geocode_empty", query=query)
         return None
     location = _to_location(query, items[0])
     cache.set(key, location.model_dump(), s.cache_ttl_s * 30)  # places do not move: cache for a month
@@ -101,6 +102,7 @@ async def reverse_geocode(coords: Coordinates) -> ResolvedLocation | None:
         "/reverse", {"lat": coords.lat, "lon": coords.lon, "zoom": 14, "addressdetails": 1}
     )
     if not item or "lat" not in item:
+        log.info("reverse_geocode_empty")
         return None
     location = _to_location(f"{coords.lat},{coords.lon}", item)
     cache.set(key, location.model_dump(), s.cache_ttl_s * 30)
@@ -180,17 +182,23 @@ OVERPASS_COOLDOWN_S = 300
 _overpass_down_until = 0.0
 
 
-async def _overpass_fetch(query: str, attempts_per_server: int = 2) -> list[dict] | None:
+async def _overpass_fetch(query: str, attempts_per_server: int = 1) -> list[dict] | None:
     """POST the query to each Overpass server, backing off on overload responses.
 
-    Circuit breaker: after every server fails, skip Overpass for a few minutes instead of making
-    each user wait for the same timeouts again.
+    The servers share one time budget: public instances are often overloaded, and a user should
+    not wait 40 s for them when Tavily can answer. Circuit breaker: after every server fails, skip
+    Overpass for a few minutes instead of making each user wait for the same timeouts again.
     """
     global _overpass_down_until
     if time.monotonic() < _overpass_down_until:
         log.info("overpass_skipped", reason="circuit open")
         return None
-    elements = await _overpass_try_servers(query, attempts_per_server)
+    budget = get_settings().overpass_budget_s
+    try:
+        elements = await asyncio.wait_for(_overpass_try_servers(query, attempts_per_server), budget)
+    except TimeoutError:
+        log.warning("overpass_budget_exceeded", budget_s=budget)
+        elements = None
     if elements is None:
         _overpass_down_until = time.monotonic() + OVERPASS_COOLDOWN_S
     return elements
@@ -273,11 +281,13 @@ async def find_places(
     area_name: str | None = None,
     limit: int | None = None,
     query: str | None = None,
+    photon_fallback: bool = True,
 ) -> list[PlaceCandidate]:
     """Restaurants, cafés and fast-food places with a name within `radius_m` of `center`.
 
     Overpass is the primary source (it has cuisine and diet tags). When every Overpass server is
-    busy, Photon searches by name around the same point, using `query` (or the cuisines).
+    busy, Photon searches by name around the same point, unless `photon_fallback` is off (the web
+    search agent tries Tavily before Photon).
     """
     s, cache = get_settings(), get_cache()
     radius_m = min(radius_m or s.web_search_radius_m, 10_000)
@@ -292,18 +302,38 @@ async def find_places(
         if elements is not None:
             cache.set(key, elements, s.cache_ttl_s)
 
-    if elements is not None:
-        places = [p for e in elements if (p := element_to_candidate(e, center, area_name))]
+    if elements is None:
+        if not photon_fallback:
+            return []
+        return await search_photon(center, cuisines, dietary, radius_m, area_name, limit, query)
+    places = [p for e in elements if (p := element_to_candidate(e, center, area_name))]
+    return rank_places(places, cuisines, dietary, center, radius_m)[:limit]
+
+
+async def search_photon(
+    center: Coordinates,
+    cuisines: list[str] | None = None,
+    dietary: list[str] | None = None,
+    radius_m: int | None = None,
+    area_name: str | None = None,
+    limit: int | None = None,
+    query: str | None = None,
+) -> list[PlaceCandidate]:
+    """Last resort: Photon finds places by name, so the search uses the cuisines (or `query`)."""
+    s, cache = get_settings(), get_cache()
+    radius_m = min(radius_m or s.web_search_radius_m, 10_000)
+    limit = limit or s.web_max_places
+    cuisines, dietary = cuisines or [], dietary or []
+    center = center.rounded(3)
+    search = " ".join([*cuisines, *dietary]) or query or "restaurant"
+    photon_key = make_key("photon", {"c": center.model_dump(), "q": search.lower()})
+    cached = cache.get(photon_key)
+    if cached is not None:
+        places = [PlaceCandidate.model_validate(p) for p in cached]
     else:
-        search = " ".join([*cuisines, *dietary]) or query or "restaurant"
-        photon_key = make_key("photon", {"c": center.model_dump(), "q": search.lower()})
-        cached = cache.get(photon_key)
-        if cached is not None:
-            places = [PlaceCandidate.model_validate(p) for p in cached]
-        else:
-            places = await _photon_search(center, search, radius_m, area_name)
-            if places is None:
-                return []
-            cache.set(photon_key, [p.model_dump() for p in places], s.cache_ttl_s)
-        log.info("places_fallback_photon", query=search, results=len(places))
+        places = await _photon_search(center, search, radius_m, area_name)
+        if places is None:
+            return []
+        cache.set(photon_key, [p.model_dump() for p in places], s.cache_ttl_s)
+    log.info("places_fallback_photon", query=search, results=len(places))
     return rank_places(places, cuisines, dietary, center, radius_m)[:limit]

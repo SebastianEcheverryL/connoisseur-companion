@@ -14,7 +14,8 @@ import type { Geolocation } from "@/components/stores";
 import { answerWithoutPickLists, isSpanish, shortPlace } from "@/lib/answer";
 import { chatTitle } from "@/lib/chats";
 import { messageText } from "@/lib/history";
-import type { ChatDataParts, ChatMessage, Coordinates } from "@/lib/types";
+import { memoryChips } from "@/lib/memory";
+import type { ChatDataParts, ChatMessage, Coordinates, Memory } from "@/lib/types";
 
 // Leaflet touches `window`: load the map in the browser only
 const PlacesMap = dynamic(() => import("@/components/PlacesMap"), { ssr: false });
@@ -42,6 +43,7 @@ const SHORT_NODE: Record<string, string> = {
   nutrition_expert: "experts",
   recommend: "recommend",
   tool_agent: "lookup",
+  recall: "recall",
   respond: "respond",
 };
 const INTENT_LABEL: Record<string, string> = { restaurant: "Restaurant", recipe: "Recipe", both: "Restaurant + recipe" };
@@ -132,6 +134,7 @@ export default function Conversation({ id, initialMessages, geo, onSettled }: Pr
                   message={message}
                   streaming={busy && i === messages.length - 1}
                   isLast={i === messages.length - 1}
+                  chatId={id}
                   onShareLocation={shareAndRetry}
                   onTypeCity={() => inputRef.current?.focus()}
                   geoStatus={geo.status}
@@ -351,12 +354,13 @@ type AssistantProps = {
   message: ChatMessage;
   streaming: boolean;
   isLast: boolean;
+  chatId: string;
   onShareLocation: () => void;
   onTypeCity: () => void;
   geoStatus: Geolocation["status"];
 };
 
-function AssistantTurn({ message, streaming, isLast, onShareLocation, onTypeCity, geoStatus }: AssistantProps) {
+function AssistantTurn({ message, streaming, isLast, chatId, onShareLocation, onTypeCity, geoStatus }: AssistantProps) {
   let steps: ChatDataParts["step"] = { labels: [], nodes: [] };
   let result: ChatDataParts["result"] | null = null;
   let text = "";
@@ -379,6 +383,7 @@ function AssistantTurn({ message, streaming, isLast, onShareLocation, onTypeCity
         {steps.labels.length > 0 && <Steps labels={steps.labels} streaming={streaming} />}
 
         {result && <Understood result={result} />}
+        {result && isLast && <Remembered memory={result.memory} chatId={chatId} spanish={spanish} />}
 
         {shownText &&
           (cards.length > 0 ? (
@@ -486,6 +491,54 @@ function Understood({ result }: { result: ChatDataParts["result"] }) {
           {chip}
         </span>
       ))}
+    </div>
+  );
+}
+
+/** What the assistant keeps between messages and chats (allergies, diet, saved city), with a way to forget it. */
+function Remembered({ memory, chatId, spanish }: { memory: Memory | null; chatId: string; spanish: boolean }) {
+  const [state, setState] = useState<"idle" | "forgetting" | "forgotten" | "error">("idle");
+  const chips = memoryChips(memory, spanish);
+  if (chips.length === 0) return null;
+
+  async function forget() {
+    setState("forgetting");
+    const res = await fetch(`/api/memory?chat=${encodeURIComponent(chatId)}`, { method: "DELETE" }).catch(() => null);
+    setState(res?.ok ? "forgotten" : "error");
+  }
+
+  if (state === "forgotten") {
+    return (
+      <p role="status" className="text-xs text-muted">
+        {spanish ? "Listo: olvidé tus preferencias." : "Done: your preferences are forgotten."}
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="mr-1 text-xs text-muted">{spanish ? "Recordado" : "Remembered"}</span>
+      {chips.map((chip) => (
+        <span
+          key={chip.label}
+          className={`rounded-full px-[11px] py-1 text-xs font-semibold ${
+            chip.kind === "allergy" ? "bg-danger-soft text-danger-text" : "border border-border bg-surface text-foreground"
+          }`}
+        >
+          {chip.label}
+        </span>
+      ))}
+      <button
+        onClick={forget}
+        disabled={state === "forgetting"}
+        className="ml-1 text-xs font-semibold text-muted underline-offset-2 hover:text-foreground hover:underline disabled:opacity-60"
+      >
+        {spanish ? "Olvidar mis preferencias" : "Forget my preferences"}
+      </button>
+      {state === "error" && (
+        <span role="alert" className="text-xs text-danger-text">
+          {spanish ? "No se pudo. Inténtalo de nuevo." : "That didn't work. Try again."}
+        </span>
+      )}
     </div>
   );
 }

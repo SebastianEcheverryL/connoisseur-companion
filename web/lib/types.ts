@@ -35,11 +35,21 @@ export type BackendEvent =
       language?: string | null;
       understood?: string[];
       location?: string | null;
+      memory?: Memory | null;
       seconds?: number;
       trace_id?: string | null;
     }
   | { type: "error"; message: string }
   | { type: "done" };
+
+/** What the backend remembers for this conversation (and, for signed-in users, across chats). */
+export type Memory = {
+  location: string | null;
+  dietary: string[];
+  allergies: string[];
+  /** True when something came from an earlier chat (saved diet, allergies or city). */
+  from_saved: boolean;
+};
 
 /** Custom data parts streamed to the UI next to the assistant's text. */
 export type ChatDataParts = {
@@ -52,6 +62,7 @@ export type ChatDataParts = {
     language: string | null;
     understood: string[];
     location: string | null;
+    memory: Memory | null;
     seconds: number | null;
   };
 };

@@ -4,6 +4,7 @@ input_guard ── (blocked) ── END
      │
 profile ─┬─ respond                                   (help, refusals)
          ├─ tool_agent                                (lookups through MCP tools)
+         ├─ recall                                    (follow-ups on earlier web/OSM picks)
          ├─ retrieve_local ───────────────┐           (recipes)
          └─ locate ─┬─ ask_location                   ("near me" without a position)
                     ├─ retrieve_local ─┬──┤           (California)
@@ -31,6 +32,7 @@ def build_graph():
     g.add_node("profile", nodes.profile)
     g.add_node("respond", nodes.respond)
     g.add_node("tool_agent", tool_agent)
+    g.add_node("recall", nodes.recall)
     g.add_node("locate", nodes.locate)
     g.add_node("ask_location", nodes.ask_location)
     g.add_node("retrieve_local", nodes.retrieve_local)
@@ -43,7 +45,7 @@ def build_graph():
 
     g.add_edge(START, "input_guard")
     g.add_conditional_edges("input_guard", guards.route_after_input_guard, {"blocked": END, "profile": "profile"})
-    g.add_conditional_edges("profile", nodes.route_intent, ["locate", "retrieve_local", "tool_agent", "respond"])
+    g.add_conditional_edges("profile", nodes.route_intent, ["locate", "retrieve_local", "tool_agent", "recall", "respond"])
     g.add_conditional_edges("locate", nodes.route_after_locate, ["retrieve_local", "web_search", "ask_location"])
     g.add_edge("ask_location", END)
     g.add_conditional_edges("retrieve_local", nodes.route_after_local, ["web_search", "experts"])
@@ -53,6 +55,7 @@ def build_graph():
     g.add_edge("recommend", "output_guard")
     g.add_edge("respond", END)
     g.add_edge("tool_agent", "output_guard")
+    g.add_edge("recall", "output_guard")
     g.add_edge("output_guard", END)
     return g.compile()
 

@@ -54,6 +54,17 @@ def fold(text: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", text.lower()) if not unicodedata.combining(c))
 
 
+def about_place(page, name: str, area: str | None) -> bool:
+    """A search result names the place and, when the area is known, has one part of it ("Laureles, Medellín")
+    in its title or url. There is an "El Cielo" in Medellín and another one in Washington DC, and the page
+    about the second one mentions Medellín in its text."""
+    if fold(name) not in fold(f"{page.title} {page.content} {page.url}"):
+        return False
+    heading = fold(f"{page.title} {page.url}").replace("-", " ").replace("_", " ")
+    parts = [fold(part.strip()) for part in (area or "").split(",") if part.strip()]
+    return not parts or any(part in heading for part in parts)
+
+
 def site_name(url: str) -> str:
     host = urlparse(url).netloc.lower().removeprefix("www.")
     for key, name in SITE_NAMES.items():

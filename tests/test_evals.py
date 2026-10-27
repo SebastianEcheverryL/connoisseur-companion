@@ -64,7 +64,7 @@ async def test_judge_counts_a_supported_claim_with_a_fake_quote_as_unsupported(m
 
 
 async def test_grounding_check_replaces_answer_only_when_claims_are_unsupported(monkeypatch):
-    async def unsupported(question, answer, evidence):
+    async def unsupported(question, answer, evidence, language=None):
         return GroundingCheck(unsupported_claims=["takes reservations"],
                               revised_answer="I don't have reservation information for Sakura Garden.")
 
@@ -72,13 +72,13 @@ async def test_grounding_check_replaces_answer_only_when_claims_are_unsupported(
     answer, revised = await grounding.enforce("q", "Yes, it takes reservations.", ["{}"])
     assert revised and answer.startswith("I don't have")
 
-    async def supported(question, answer, evidence):
+    async def supported(question, answer, evidence, language=None):
         return GroundingCheck(unsupported_claims=[], revised_answer=answer)
 
     monkeypatch.setattr(grounding, "check", supported)
     assert await grounding.enforce("q", "Fine answer.", ["{}"]) == ("Fine answer.", False)
 
-    async def broken(question, answer, evidence):
+    async def broken(question, answer, evidence, language=None):
         return None
 
     monkeypatch.setattr(grounding, "check", broken)

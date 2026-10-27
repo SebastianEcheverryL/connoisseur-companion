@@ -68,7 +68,7 @@ locals {
       | limit 200
     EOT
     "external tools"      = <<-EOT
-      filter event like /tavily|overpass|photon|nominatim|geocode|web_|places/
+      filter event like /tavily|overpass|photon|nominatim|geocode|web_|places|dish/
       | stats count() as calls by event, level
       | sort calls desc
     EOT

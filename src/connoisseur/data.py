@@ -39,6 +39,14 @@ def load_culinary_map() -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
+def find_restaurants(name: str) -> list[dict]:
+    """Guide restaurants whose name contains the query or is contained in it ("Sakura" -> Sakura Garden)."""
+    query = name.lower().strip()
+    if not query:
+        return []
+    return [r for r in load_restaurants() if query in r["name"].lower() or r["name"].lower() in query]
+
+
 def restaurants_by_id() -> dict[int, dict]:
     return {r["itemId"]: r for r in load_restaurants()}
 

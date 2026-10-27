@@ -25,16 +25,19 @@ def _evidence_block(evidence: list[str]) -> str:
 
 
 @traced("grounding_check", as_type="evaluator")
-async def check(question: str, answer: str, evidence: list[str]) -> GroundingCheck | None:
+async def check(question: str, answer: str, evidence: list[str], language: str | None = None) -> GroundingCheck | None:
     from connoisseur.agents.nodes import structured_call  # local import: nodes imports this package
 
-    user = f"Question: {question}\n\nDraft answer:\n{answer}\n\nEVIDENCE:\n{_evidence_block(evidence)}"
+    # Said explicitly: Nova Lite wrote the revision of a Spanish draft in English
+    header = f"Answer language: {language}\n" if language else ""
+    user = f"{header}Question: {question}\n\nDraft answer:\n{answer}\n\nEVIDENCE:\n{_evidence_block(evidence)}"
     return await structured_call(GroundingCheck, load_prompt("grounding_check"), user)
 
 
-async def enforce(question: str, answer: str, evidence: list[str]) -> tuple[str, bool]:
+async def enforce(question: str, answer: str, evidence: list[str],
+                  language: str | None = None) -> tuple[str, bool]:
     """Return (answer, revised). Keeps the draft if the checker fails or returns something unusable."""
-    result = await check(question, answer, evidence)
+    result = await check(question, answer, evidence, language)
     if result is None or not result.unsupported_claims or not result.revised_answer.strip():
         return answer, False
     log.info("grounding_revised", removed=result.unsupported_claims[:5])

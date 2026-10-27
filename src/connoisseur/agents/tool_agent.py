@@ -89,7 +89,9 @@ async def tool_agent(state: ChatState) -> dict:
                 answer = message_text(response.content)
                 route = state["route"] + tools_used
                 if get_settings().enable_grounding_check and evidence:
-                    answer, revised = await grounding.enforce(state["message"], answer, evidence)
+                    context = state.get("context")
+                    answer, revised = await grounding.enforce(state["message"], answer, evidence,
+                                                              context.language if context else None)
                     route.append("grounding:revised" if revised else "grounding:ok")
                 return {"answer": answer, "route": route, "evidence": evidence}
 

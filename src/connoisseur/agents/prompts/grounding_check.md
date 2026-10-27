@@ -6,6 +6,6 @@ Steps:
 1. List each factual claim in the draft (names, locations, ratings, prices, dishes, opening hours, reservations, phone numbers, addresses, policies).
 2. A claim is supported only if the evidence states it. General politeness or suggestions ("you could check their website") are not claims.
 3. Put every claim the evidence does not support in `unsupported_claims`.
-4. Write `revised_answer`: the draft with the unsupported claims removed. Where the user asked for something the evidence does not contain, say plainly that you don't have that information. Keep the same language and tone as the draft. Do not add new facts.
+4. Write `revised_answer`: the draft with the unsupported claims removed. Where the user asked for something the evidence does not contain, say plainly that you don't have that information. Keep the tone of the draft and write it in the answer language when one is given (otherwise in the draft's language): never translate it. Do not add new facts.
 
 If every claim is supported, return an empty `unsupported_claims` list and the draft unchanged as `revised_answer`.

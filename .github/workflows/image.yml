@@ -19,7 +19,7 @@ jobs:
   build-and-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Base images come from public.ecr.aws: anonymous pulls from shared runners hit its data limit (429).
       # The role (terraform output github_pr_role_arn) can only get the ECR Public login token. Skipped for
       # forks, which get no OIDC token, and until the AWS_PR_ROLE_ARN variable exists.

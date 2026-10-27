@@ -8,6 +8,7 @@ One chat request = one trace:
 
 Sensitive data is masked before it leaves the process (see `mask_sensitive`).
 """
+import asyncio
 import functools
 import inspect
 from collections.abc import Iterator
@@ -168,7 +169,41 @@ def score(trace_id: str, name: str, value: float | str, comment: str | None = No
     return True
 
 
-def flush() -> None:
+def check_credentials() -> bool | None:
+    """Ask Langfuse whether the keys are valid (None = tracing disabled).
+
+    Without this, wrong keys or the wrong region only show up as "Failed to export spans batch code: 401".
+    It makes one blocking HTTP call: run it once at startup, off the event loop.
+    """
     lf = get_langfuse()
-    if lf is not None:
+    if lf is None:
+        return None
+    host = get_settings().langfuse_host
+    try:
+        ok, error = lf.auth_check(), None
+    except Exception as exc:  # noqa: BLE001 - the SDK raises on 401/403 and network errors
+        ok, error = False, str(exc)[:200]
+    if ok:
+        log.info("langfuse_auth_ok", host=host)
+    else:
+        log.error("langfuse_auth_failed", host=host, error=error,
+                  hint="check the key pair and that the host matches the project region (EU or US)")
+    return ok
+
+
+def flush() -> None:
+    """Send buffered spans now. On Lambda this must happen before the response ends: once it is sent,
+    the environment is frozen and the spans would wait (or be lost) until the next invocation."""
+    lf = get_langfuse()
+    if lf is None:
+        return
+    try:
         lf.flush()
+    except Exception as exc:  # noqa: BLE001 - tracing must never break an answer
+        log.warning("langfuse_flush_failed", error=str(exc)[:200])
+
+
+async def aflush() -> None:
+    """`flush` without blocking the event loop."""
+    if get_langfuse() is not None:
+        await asyncio.to_thread(flush)

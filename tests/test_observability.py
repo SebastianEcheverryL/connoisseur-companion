@@ -33,6 +33,43 @@ def test_tracing_is_a_no_op_without_keys():
     assert obs.score("0" * 32, "user_feedback", 1.0) is False
 
 
+async def test_credentials_check_and_flush_are_no_ops_without_keys():
+    assert obs.check_credentials() is None
+    obs.flush()
+    await obs.aflush()
+
+
+class _FakeLangfuse:
+    def __init__(self, auth_error=None, flush_error=None):
+        self.auth_error, self.flush_error, self.flushed = auth_error, flush_error, 0
+
+    def auth_check(self):
+        if self.auth_error:
+            raise self.auth_error
+        return True
+
+    def flush(self):
+        if self.flush_error:
+            raise self.flush_error
+        self.flushed += 1
+
+
+def test_credentials_check_reports_rejected_keys(monkeypatch):
+    monkeypatch.setattr(obs, "get_langfuse", lambda: _FakeLangfuse())
+    assert obs.check_credentials() is True
+    monkeypatch.setattr(obs, "get_langfuse", lambda: _FakeLangfuse(auth_error=RuntimeError("status_code: 401")))
+    assert obs.check_credentials() is False
+
+
+async def test_flush_sends_spans_and_never_raises(monkeypatch):
+    fake = _FakeLangfuse()
+    monkeypatch.setattr(obs, "get_langfuse", lambda: fake)
+    await obs.aflush()
+    assert fake.flushed == 1
+    monkeypatch.setattr(obs, "get_langfuse", lambda: _FakeLangfuse(flush_error=ConnectionError("down")))
+    obs.flush()
+
+
 async def test_traced_decorator_is_transparent_when_disabled():
     @obs.traced("double")
     async def double(x):

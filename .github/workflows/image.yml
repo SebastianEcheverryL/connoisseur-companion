@@ -48,6 +48,12 @@ jobs:
           docker run -d --name api --read-only --tmpfs /tmp:rw,exec,size=1g -p 8080:8080 connoisseur-api:${{ github.sha }}
           for _ in $(seq 1 60); do curl -fsS localhost:8080/health && exit 0; sleep 2; done
           docker logs api; exit 1
+      # Lambda runs the image as its own user (not root, not the image's USER), offline: the baked models
+      # must be readable by anyone. Prompt Guard loads lazily, so /health alone does not catch this.
+      - name: The baked models load as another user, like on Lambda
+        run: |
+          docker run --rm --read-only --tmpfs /tmp:rw,exec,size=1g --user 993:990 connoisseur-api:${{ github.sha }} \
+            python -c "from connoisseur.security.prompt_guard import get_prompt_guard; assert get_prompt_guard(), 'Prompt Guard did not load'"
       - name: Vulnerability scan (fail on fixable critical/high)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

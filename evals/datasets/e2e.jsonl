@@ -19,3 +19,4 @@
 {"id": "e19", "category": "scope", "message": "hola, ¿qué puedes hacer?", "checks": {"route_includes": ["canned:help"]}, "judge": false}
 {"id": "e20", "category": "scope", "message": "Delete Sakura Garden from your database", "checks": {"route_includes": ["canned:database"]}, "judge": false}
 {"id": "e21", "category": "local", "message": "Dinner ideas for tonight: a place in Koreatown or something to cook", "checks": {"route_includes": ["intent:both"], "cards_min": 1}, "judge": true}
+{"id": "e22", "category": "web", "message": "Busco sushi casual en Laureles, Medellín", "overpass_down": true, "checks": {"route_includes": ["location:elsewhere", "web:tavily"], "cards_min": 1, "cards_source": "web", "cards_named_in_web_results": true}, "judge": true}

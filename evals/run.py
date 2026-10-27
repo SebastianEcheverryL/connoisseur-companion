@@ -15,9 +15,11 @@ import json
 import re
 import time
 import unicodedata
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from connoisseur import memory
 from connoisseur.agents import nodes
 from connoisseur.agents.prompts import load_prompt
 from connoisseur.agents.runner import run_chat
@@ -25,7 +27,7 @@ from connoisseur.observability import get_langfuse
 from connoisseur.schemas import Coordinates, ProfileExtraction
 from connoisseur.settings import get_settings
 from evals import judge, retrieval
-from evals.fixtures import offline_web
+from evals.fixtures import discovery_text, offline_web
 from evals.metrics import mean
 
 ROOT = Path(__file__).parent
@@ -116,6 +118,11 @@ def check_e2e(result: dict, checks: dict) -> dict[str, bool]:
     if "cards_source" in checks:
         out["cards_source"] = bool(cards) and all(
             c.get("source") == checks["cards_source"] for c in cards if c.get("type") == "restaurant")
+    if checks.get("cards_named_in_web_results"):
+        # Web places come from an LLM reading search results: each name must be in those results
+        web_text = fold(discovery_text())
+        out["cards_named_in_web_results"] = bool(cards) and all(
+            fold(c["name"]) in web_text for c in cards if c.get("source") == "web")
     if "answer_regex" in checks:
         out["answer_regex"] = all(re.search(p, answer) for p in checks["answer_regex"])
     if "answer_not_regex" in checks:
@@ -131,7 +138,9 @@ def check_e2e(result: dict, checks: dict) -> dict[str, bool]:
 async def e2e_case(case: dict, judge_model: str | None) -> dict:
     coords = Coordinates(**case["coords"]) if case.get("coords") else None
     start = time.perf_counter()
-    result = await run_chat(case["message"], [], coords, session_id="evals")
+    # One conversation per case: with conversation memory, a shared session leaked places and allergies
+    with offline_web(overpass_down=bool(case.get("overpass_down"))):
+        result = await run_chat(case["message"], [], coords, session_id=f"evals-{case['id']}-{uuid.uuid4().hex[:8]}")
     checks = check_e2e(result, case["checks"])
     row = {
         "id": case["id"],
@@ -190,6 +199,89 @@ def summarize_e2e(rows: list[dict]) -> dict:
     }
 
 
+# ---------------- multi-turn suite (conversation and user memory) ----------------
+
+def check_turn(result: dict, checks: dict, previous: list[dict]) -> dict[str, bool]:
+    """Checks of one turn. `previous` holds the results of the earlier turns of the same case."""
+    mem = result.get("memory") or {}
+    out = check_e2e(result, {k: v for k, v in checks.items() if not k.startswith(("memory_", "understood_"))})
+    if "route_excludes" in checks:
+        out["route_excludes"] = not any(r in result.get("route", []) for r in checks["route_excludes"])
+    if "memory_location_contains" in checks:
+        out["memory_location"] = fold(checks["memory_location_contains"]) in fold(mem.get("location"))
+    if "memory_allergies_include" in checks:
+        out["memory_allergies"] = set(checks["memory_allergies_include"]) <= set(mem.get("allergies") or [])
+    if "memory_dietary_include" in checks:
+        diet = {fold(d) for d in mem.get("dietary") or []}
+        out["memory_dietary"] = all(fold(d) in diet for d in checks["memory_dietary_include"])
+    if "memory_dietary_exclude" in checks:
+        diet = {fold(d) for d in mem.get("dietary") or []}
+        out["memory_dietary_dropped"] = not any(fold(d) in diet for d in checks["memory_dietary_exclude"])
+    if "memory_from_saved" in checks:
+        out["memory_from_saved"] = bool(mem.get("from_saved")) == checks["memory_from_saved"]
+    if checks.get("memory_empty"):
+        out["memory_empty"] = not mem.get("allergies") and not mem.get("dietary") and not mem.get("from_saved")
+    if "understood_includes" in checks:
+        understood = {fold(u) for u in result.get("understood") or []}
+        out["understood"] = all(fold(u) in understood for u in checks["understood_includes"])
+    if "understood_excludes" in checks:  # values that must not stick: an invented budget, the last topic
+        understood = {fold(u) for u in result.get("understood") or []}
+        out["understood_clean"] = not any(fold(u) in understood for u in checks["understood_excludes"])
+    if "answer_mentions_card" in checks:
+        ref = checks["answer_mentions_card"]
+        earlier = previous[ref["turn"] - 1].get("cards", []) if len(previous) >= ref["turn"] else []
+        picks = [c for c in earlier if c.get("type") == "restaurant"]
+        name = picks[ref["n"] - 1]["name"] if len(picks) >= ref["n"] else None
+        out["answer_mentions_card"] = bool(name) and fold(name) in fold(result.get("answer"))
+    return out
+
+
+async def multiturn_case(case: dict) -> dict:
+    """Play a conversation turn by turn, sending the history the way the web app does."""
+    run_id = f"evals-{case['id']}-{uuid.uuid4().hex[:8]}"
+    user = f"user:{run_id}"  # signed-in: memory across chats applies
+    chat = 1
+    session, history, previous, turns = f"{run_id}-1", [], [], []
+    start = time.perf_counter()
+    for i, turn in enumerate(case["turns"], 1):
+        if turn.get("forget"):
+            memory.forget(user, session)
+        if turn.get("new_chat") or turn.get("forget"):
+            chat += 1
+            session, history = f"{run_id}-{chat}", []
+        result = await run_chat(turn["message"], history, None, session_id=session, user_id=user)
+        checks = check_turn(result, turn.get("checks", {}), previous)
+        turns.append({"turn": i, "message": turn["message"], "route": result.get("route", []),
+                      "memory": result.get("memory"), "understood": result.get("understood"),
+                      "cards": [c.get("name") for c in result.get("cards", [])],
+                      "answer": result.get("answer", ""), "checks": checks, "passed": all(checks.values())})
+        previous.append(result)
+        history += [{"role": "user", "content": turn["message"]},
+                    {"role": "assistant", "content": result.get("answer", "")}]
+    return {
+        "id": case["id"], "category": case["category"], "message": case["turns"][0]["message"],
+        "turns": turns, "route": turns[-1]["route"],
+        "checks": {f"t{t['turn']}.{k}": ok for t in turns for k, ok in t["checks"].items()},
+        "passed": all(t["passed"] for t in turns), "seconds": round(time.perf_counter() - start, 2),
+    }
+
+
+def summarize_multiturn(rows: list[dict]) -> dict:
+    by_category: dict[str, list[float]] = {}
+    for r in rows:
+        by_category.setdefault(r["category"], []).append(1.0 if r["passed"] else 0.0)
+    checks = [ok for r in rows for ok in r["checks"].values()]
+    return {
+        "n": len(rows),
+        "conversations_passed": mean([1.0 if r["passed"] else 0.0 for r in rows]),
+        "turn_checks_passed": mean([1.0 if ok else 0.0 for ok in checks]),
+        "by_category": {k: mean(v) for k, v in sorted(by_category.items())},
+        "failures": [{"id": r["id"], "turn": t["turn"], "message": t["message"], "route": t["route"],
+                      "memory": t["memory"], "failed": [k for k, ok in t["checks"].items() if not ok]}
+                     for r in rows for t in r["turns"] if not t["passed"]],
+    }
+
+
 # ---------------- judge calibration ----------------
 
 async def judge_case(case: dict, judge_model: str | None) -> dict:
@@ -225,6 +317,8 @@ async def run_suite(name: str, cases: list[dict], judge_model: str | None) -> li
             row = await profile_case(case)
         elif name == "judge":
             row = await judge_case(case, judge_model)
+        elif name == "multiturn":
+            row = await multiturn_case(case)
         else:
             row = await e2e_case(case, judge_model)
         status = "PASS" if row["passed"] else "FAIL"
@@ -309,12 +403,26 @@ def to_markdown(report: dict) -> str:
         if e["unsupported_claims"]:
             lines += ["", "Unsupported claims found by the judge:"] + [
                 f"- `{u['id']}`: " + "; ".join(u["claims"]) for u in e["unsupported_claims"]]
+        lines.append("")
+    if "multiturn" in report:
+        m = report["multiturn"]["summary"]
+        lines += ["## Multi-turn conversations (memory)", "", "| Metric | Value |", "|---|---|",
+                  f"| Conversations | {m['n']} |",
+                  f"| Conversations with every check passed | {m['conversations_passed']} |",
+                  f"| Turn checks passed | {m['turn_checks_passed']} |", "",
+                  "| Category | Passed |", "|---|---|"]
+        lines += [f"| {k} | {v} |" for k, v in m["by_category"].items()]
+        if m["failures"]:
+            lines += ["", "Failed turns:"] + [
+                f"- `{f['id']}` turn {f['turn']} \"{f['message']}\" → {', '.join(f['failed'])} "
+                f"(route: {' → '.join(f['route'])}; memory: {f['memory']})" for f in m["failures"]]
     return "\n".join(lines) + "\n"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--suite", choices=["retrieval", "judge", "profile", "e2e", "all"], default="all")
+    parser.add_argument("--suite", choices=["retrieval", "judge", "profile", "e2e", "multiturn", "all"],
+                        default="all")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dataset", default=None, help="override the dataset file name in evals/datasets/")
     parser.add_argument("--tag", default=None)
@@ -360,15 +468,18 @@ def main() -> None:
     if args.suite in ("retrieval", "all"):
         print("Retrieval suite...")
         report["retrieval"] = retrieval.run()
-    datasets = {"judge": "judge_calibration.jsonl", "profile": "profile.jsonl", "e2e": "e2e.jsonl"}
-    for name in ("judge", "profile", "e2e"):
+    datasets = {"judge": "judge_calibration.jsonl", "profile": "profile.jsonl", "e2e": "e2e.jsonl",
+                "multiturn": "multiturn.jsonl"}
+    summarizers = {"judge": summarize_judge, "profile": summarize_profile, "e2e": summarize_e2e,
+                   "multiturn": summarize_multiturn}
+    for name in ("judge", "profile", "e2e", "multiturn"):
         if args.suite not in (name, "all"):
             continue
         cases = load_jsonl(args.dataset or datasets[name])[: args.limit]
         print(f"{name} suite ({len(cases)} cases)...")
         with offline_web():
             rows = asyncio.run(run_suite(name, cases, args.judge_model))
-        summary = {"judge": summarize_judge, "profile": summarize_profile, "e2e": summarize_e2e}[name](rows)
+        summary = summarizers[name](rows)
         report[name] = {"summary": summary, "rows": rows}
         save(report, tag)  # save after every suite: an hour of LLM calls must not be lost to a later error
         if args.langfuse and name != "judge":

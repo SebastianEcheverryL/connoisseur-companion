@@ -104,3 +104,8 @@ async def test_a_recommendation_set_missing_one_list_is_completed(monkeypatch):
     use_model(monkeypatch, {"raw": raw, "parsed": None, "parsing_error": ValueError("recipes missing")})
     picks = await nodes.structured_call(RecommendationSet, "system", "user")
     assert picks.restaurants[0].candidate_id == "web:1" and picks.recipes == []
+
+
+def test_punctuation_alone_is_not_a_value():
+    profile = ProfileExtraction(**{**FULL, "vibe": ".", "occasion": "-", "cuisines": ["sushi", "."]})
+    assert profile.vibe is None and profile.occasion is None and profile.cuisines == ["sushi"]

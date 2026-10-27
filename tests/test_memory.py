@@ -48,7 +48,7 @@ def test_allergies_are_detected_by_rules_and_never_dropped_by_the_model():
 def test_a_failed_extraction_keeps_the_remembered_profile():
     before = Profile(location="Medellín", cuisines=["sushi"], allergies=["peanut"])
     after = memory.merge_profile(before, UserContext(intent="restaurant"), "?")
-    assert after == before
+    assert after.model_dump(exclude={"topic"}) == before.model_dump(exclude={"topic"})
 
 
 def test_long_or_repeated_values_are_clipped():
@@ -204,3 +204,35 @@ def test_delete_memory_validates_the_session_id(client):
 def test_an_allergy_filed_as_a_diet_moves_to_the_allergies():
     after = memory.merge_profile(Profile(), ctx(dietary=["peanut", "vegan", "peanut-free"]), "soy alérgico al maní")
     assert after.dietary == ["vegan", "peanut-free"] and after.allergies == ["peanut"]
+
+
+def test_a_new_topic_starts_its_own_cuisine_vibe_and_budget():
+    recipe = memory.merge_profile(Profile(), ctx(intent="recipe", cuisines=["noodles"], budget="$"), "noodles baratos")
+    restaurant = memory.merge_profile(recipe, ctx(location="El Poblado"), "algo vegano en El Poblado")
+    assert restaurant.cuisines == [] and restaurant.budget is None and restaurant.topic == "restaurant"
+    # A lookup or a thank-you does not change the topic
+    after = memory.merge_profile(Profile(cuisines=["sushi"], topic="restaurant"), ctx(intent="lookup"), "y el segundo?")
+    assert after.cuisines == ["sushi"] and after.topic == "restaurant"
+
+
+def test_a_price_level_needs_price_words():
+    kept = memory.merge_profile(Profile(budget="$$"), ctx(budget="$$$"), "recomiéndame algo para cenar")
+    assert kept.budget == "$$"
+    assert memory.merge_profile(Profile(budget="$$"), ctx(budget="$"), "algo más barato").budget == "$"
+    assert memory.merge_profile(Profile(), ctx(budget="$$$$"), "something fancy").budget == "$$$$"
+
+
+def test_sentences_copied_into_vibe_or_occasion_are_dropped():
+    after = memory.merge_profile(Profile(vibe="quiet"), ctx(vibe="Sushi en Laureles, Medellín",
+                                                          occasion="Soy alérgico al maní."), "x")
+    assert after.vibe == "quiet" and after.occasion is None
+    assert memory.merge_profile(Profile(), ctx(occasion="date night"), "x").occasion == "date night"
+
+
+def test_after_a_topic_switch_only_cuisines_the_message_names_count():
+    recipe = Profile(cuisines=["noodles"], topic="recipe")
+    # Nova Lite re-extracted "noodles" from the history for a restaurant request that never says it
+    after = memory.merge_profile(recipe, ctx(cuisines=["noodles", "vegan food"]), "algo de vegan food en El Poblado")
+    assert after.cuisines == ["vegan food"]
+    same_topic = memory.merge_profile(Profile(cuisines=["sushi"], topic="restaurant"), ctx(cuisines=["sushi"]), "y más barato")
+    assert same_topic.cuisines == ["sushi"]

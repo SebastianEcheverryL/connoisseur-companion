@@ -11,6 +11,7 @@ Locally the store lives in memory; on AWS it is the DynamoDB table of the quota 
 with the same `expires_at` TTL attribute.
 """
 import json
+import re
 import time
 from functools import lru_cache
 from threading import Lock
@@ -38,6 +39,7 @@ class Profile(BaseModel):
     vibe: str | None = None
     budget: str | None = None
     occasion: str | None = None
+    topic: str | None = None  # "restaurant" or "recipe": what the cuisine, vibe and budget were about
 
 
 class CardRef(BaseModel):
@@ -85,11 +87,30 @@ def _text(value: str | None) -> str | None:
     return " ".join(value.split())[:MAX_TEXT] or None
 
 
+# A price level is only believed when the message talks about price: Nova Lite answered "$$$" for "dinner"
+PRICE_WORDS = re.compile(
+    r"\$|cheap|pric|budget|afford|expensive|fancy|upscale|splurge|luxur"
+    r"|barat|econ[oó]mic|caro|cara\b|precio|presupuesto|lujo|elegante|costos",
+    re.IGNORECASE,
+)
+TOPICS = {"restaurant": "restaurant", "both": "restaurant", "recipe": "recipe"}
+
+
+def _wording(value: str | None) -> str | None:
+    """A vibe or occasion is a few words ("moody", "date night"). Nova Lite copied whole sentences of
+    the message into them ("Soy alérgico al maní."), which memory would then keep for the whole chat."""
+    text = _text(value)
+    return text if text and len(text.split()) <= 3 else None
+
+
 def merge_profile(prev: Profile, ctx: UserContext, message: str, dropped: list[str] | None = None) -> Profile:
     """Combine what was known with what this message adds.
 
     - New values replace old ones; a field the message does not mention keeps its value
-      ("now in Brooklyn" keeps "sushi").
+      ("now in Brooklyn" keeps "sushi"), unless the topic changes between recipes and restaurants:
+      then cuisine, vibe, occasion and budget start over (the noodles of a recipe are not a
+      restaurant search).
+    - A price level needs price words in the message; models invent one otherwise.
     - Diet accumulates; an item leaves only when the user drops it ("I'm not vegan anymore").
     - Allergies only accumulate, detected by rules on every message: forgetting them takes an
       explicit "forget my preferences". A missed allergy is worse than a stale one.
@@ -98,14 +119,23 @@ def merge_profile(prev: Profile, ctx: UserContext, message: str, dropped: list[s
     found = allergens.detect_allergies(message, ctx.dietary)
     # Allergies live in their own field: Nova Lite filed "peanut" as a diet despite the prompt
     diet = [d for d in [*prev.dietary, *ctx.dietary] if fold(d) not in removed and not allergens.is_allergen_name(d)]
+    topic = TOPICS.get(ctx.intent) or prev.topic
+    switched = prev.topic is not None and topic != prev.topic
+    same = Profile() if switched else prev
+    cuisines = ctx.cuisines
+    if switched:
+        # The model re-reads the old request in the history: only cuisines this message names count
+        cuisines = [c for c in cuisines if fold(c) in fold(message)]
+    budget = ctx.budget if ctx.budget and PRICE_WORDS.search(message) else None
     return Profile(
         location=_text(ctx.location) or (None if ctx.near_me else prev.location),
-        cuisines=_clip(ctx.cuisines or prev.cuisines),
+        cuisines=_clip(cuisines or same.cuisines),
         dietary=_clip(diet),
         allergies=sorted(set(prev.allergies) | found),
-        vibe=_text(ctx.vibe) or prev.vibe,
-        budget=ctx.budget or prev.budget,
-        occasion=_text(ctx.occasion) or prev.occasion,
+        vibe=_wording(ctx.vibe) or same.vibe,
+        budget=budget or same.budget,
+        occasion=_wording(ctx.occasion) or same.occasion,
+        topic=topic,
     )
 
 

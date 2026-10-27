@@ -105,8 +105,8 @@ def _clean(value):
     if not isinstance(value, str):
         return value
     text = html.unescape(value).strip().strip("\"'`“”‘’").strip()
-    if text.lower() in NULL_WORDS or PLACEHOLDER.search(text):
-        return None
+    if text.lower() in NULL_WORDS or PLACEHOLDER.search(text) or not re.search(r"\w", text):
+        return None  # also "." and "-", seen as vibe and occasion
     return text
 
 

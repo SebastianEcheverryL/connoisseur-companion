@@ -19,7 +19,10 @@ COPY data ./data
 COPY scripts ./scripts
 RUN python scripts/download_data.py --with-images \
  && python scripts/build_index.py --out /opt/chroma \
- && python scripts/warm_models.py
+ && python scripts/warm_models.py \
+ && chmod -R a+rX /opt/models /opt/chroma
+# ^ huggingface_hub writes some cache files as 0600 (owner root); Lambda runs as another user and
+#   Prompt Guard failed closed, blocking every web result, when it could not read them.
 # fastembed 0.9 pins pillow<13, which has critical CVEs fixed in 13.0. Pillow only decodes images while
 # the index above is built; the API never opens images, so the runtime gets the patched release.
 RUN pip install --no-deps "pillow>=13"

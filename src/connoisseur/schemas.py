@@ -89,8 +89,9 @@ class ProfileExtraction(BaseModel):
 
 
 NULL_WORDS = {"", "null", "none", "n/a", "unknown", "unspecified"}
-PLACEHOLDER = re.compile(r"^\(.*\)$|\bnot (specified|mentioned|provided|given)\b|\buser'?s (location|preference)",
-                         re.IGNORECASE)
+# Also template slots: Nova Lite answered restaurant_name="<<Previous recommendations[0].name>>"
+PLACEHOLDER = re.compile(r"^\(.*\)$|^<.*>$|^\[.*\]$|^\{.*\}$|\bnot (specified|mentioned|provided|given)\b"
+                         r"|\buser'?s (location|preference)|\bprevious recommendations?\b", re.IGNORECASE)
 
 # Same fallback as when the profile call fails outright: treat the message as a restaurant search
 PROFILE_DEFAULTS = {
@@ -140,6 +141,7 @@ class PlaceCandidate(BaseModel):
     vibe: str | None = None
     description: str | None = None
     diet_tags: list[str] = Field(default_factory=list)
+    signatures: list[str] = Field(default_factory=list, description="Signature dishes (guide places only)")
     coordinates: Coordinates | None = None
     url: str | None = None
     score: float = 0.0

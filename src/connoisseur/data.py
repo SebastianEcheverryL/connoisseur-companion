@@ -75,5 +75,6 @@ def restaurant_to_candidate(record: dict, score: float = 0.0) -> PlaceCandidate:
         price_range=record.get("price_range"),
         vibe=record.get("vibe"),
         description=record.get("environment"),
+        signatures=record.get("signatures") or [],
         score=score,
     )

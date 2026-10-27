@@ -34,7 +34,7 @@ jobs:
           registry-type: public
       - uses: docker/setup-buildx-action@v3
       # Lambda only accepts a single-platform image manifest: no provenance attestations
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64

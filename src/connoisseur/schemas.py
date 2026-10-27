@@ -172,6 +172,17 @@ class WebPlaceExtraction(BaseModel):
     results: list[ResultPlaces]
 
 
+class ResultDishes(BaseModel):
+    # Grouped by result for the same reason as ResultPlaces
+    result: int = Field(description="Number of the search result")
+    dishes: list[str] = Field(description="Every dish or drink of this restaurant that the result names")
+
+
+class DishExtraction(BaseModel):
+    # Required on purpose (see ProfileExtraction): an empty object must not validate
+    results: list[ResultDishes]
+
+
 class Recommendation(BaseModel):
     candidate_id: str = Field(description="id of one of the provided candidates")
     reasoning: str = Field(description="2-3 sentences explaining why it fits the user")

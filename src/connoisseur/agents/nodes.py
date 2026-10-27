@@ -5,13 +5,13 @@ import re
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
-from connoisseur import memory
+from connoisseur import data, memory
 from connoisseur.agents import grounding
 from connoisseur.agents.prompts import load_prompt
 from connoisseur.agents.state import ChatState
 from connoisseur.llm import get_chat_model, message_text
 from connoisseur.log import get_logger
-from connoisseur.places import osm, ratings, tavily, web_places
+from connoisseur.places import dishes, osm, ratings, tavily, web_places
 from connoisseur.retrieval import service
 from connoisseur.schemas import PlaceCandidate, ProfileExtraction, RecommendationSet, UserContext
 from connoisseur.security import allergens, spotlight
@@ -34,6 +34,9 @@ TEXT = {
         "none": "I couldn't find matching places{where}. Could you tell me another area or relax a filter?",
         "near": " near {place}",
         "reviews": "reviews",
+        "dishes": "These are the dishes of **{name}** mentioned on the web:",
+        "no_dishes": "I couldn't find on the web which dishes {name} serves. Check their menu or reviews "
+        "before you go.",
         "allergy_note": "Allergy note: I can't guarantee any dish is free of an allergen. Check the full ingredient "
         "list and ask the restaurant about cross-contamination before eating.",
         "blocked_input": "Sorry, I can't help with that. I'm here for restaurants, food and recipes.",
@@ -67,6 +70,9 @@ TEXT = {
         "none": "No encontré lugares que coincidan{where}. ¿Me dices otra zona o relajamos algún filtro?",
         "near": " cerca de {place}",
         "reviews": "reseñas",
+        "dishes": "Estos son los platos de **{name}** que mencionan en la web:",
+        "no_dishes": "No encontré en la web qué platos sirve {name}. Te sugiero revisar su menú o sus reseñas "
+        "antes de ir.",
         "allergy_note": "Nota sobre alergias: no puedo garantizar que un plato esté libre de un alérgeno. Revisa la "
         "lista completa de ingredientes y pregunta en el restaurante por contaminación cruzada antes de comer.",
         "blocked_input": "Lo siento, no puedo ayudarte con eso. Estoy aquí para restaurantes, comida y recetas.",
@@ -238,9 +244,14 @@ def route_intent(state: ChatState) -> str:
     if intent == "recipe":
         return "retrieve_local"
     if intent == "lookup":
-        card = _previous_card(state)
-        # The guide's tools only know the curated dataset: earlier web/OSM picks are recalled instead
-        return "recall" if card and not card.id.startswith("dataset:") else "tool_agent"
+        # The guide's tools only know the curated dataset: earlier web/OSM picks are recalled instead,
+        # and so is a named place outside the guide ("¿qué pido en Carmen?"), researched on the web
+        if card := _previous_card(state):
+            return "tool_agent" if card.id.startswith("dataset:") else "recall"
+        name = state["context"].restaurant_name
+        if name and tavily.is_enabled() and not data.find_restaurants(name):
+            return "recall"
+        return "tool_agent"
     return "respond"
 
 
@@ -256,21 +267,54 @@ def _previous_card(state: ChatState) -> memory.CardRef | None:
     return None
 
 
+_DISH_QUESTION = re.compile(
+    r"\b(plat(o|os|illo|illos)|dish(es)?|men[uú]s?|carta|especialidad(es)?|specialt(y|ies)|signature|"
+    r"qu[eé] (me )?(pido|ordeno|como|comer|pruebo)|pedir|ordenar|probar|"
+    r"what (to|should i|do you recommend i) (eat|get|try)|order)\b",
+    re.IGNORECASE,
+)
+
+
+def asks_for_dishes(text: str) -> bool:
+    return bool(_DISH_QUESTION.search(text))
+
+
+def _lookup_target(state: ChatState) -> memory.CardRef:
+    """The earlier pick the user points to, or the place they named (with the city known so far)."""
+    if card := _previous_card(state):
+        return card
+    ctx = state["context"]
+    return memory.CardRef(n=0, type="restaurant", id="web:lookup", name=ctx.restaurant_name or "",
+                          location=ctx.location)
+
+
+async def _pages_about(card: memory.CardRef) -> tuple[list[str], list[str]]:
+    """Review pages that name this place: (tagged blocks for the prompt, evidence lines)."""
+    s = get_settings()
+    if not tavily.is_enabled():
+        return [], []
+    blocks, evidence = [], []
+    query = f'"{card.name}" {card.location or ""} restaurant reviews'
+    for r in await tavily.search(query, max_results=5, include_domains=s.rating_domains or None,
+                                 ttl_s=s.rating_cache_ttl_s):
+        if not ratings.about_place(r, card.name, card.location):
+            continue  # another place, or a branch in another city
+        safe, blocked = spotlight.sanitize(f"{r.title}: {r.content}")
+        if not blocked:
+            blocks.append(spotlight.tag(safe, source=ratings.site_name(r.url)))
+            evidence.append(f"{safe} ({r.url})")
+    return blocks, evidence
+
+
 async def recall(state: ChatState) -> dict:
-    """Follow-up about an earlier pick that is not in the guide: its card details plus web results about it."""
-    ctx, card, s = state["context"], _previous_card(state), get_settings()
-    details = json.dumps(card.model_dump(exclude_none=True, exclude={"n"}), ensure_ascii=False)
-    evidence, results = [details], []
-    if tavily.is_enabled():
-        query = f'"{card.name}" {card.location or ""} restaurant reviews'
-        for r in await tavily.search(query, max_results=5, include_domains=s.rating_domains or None,
-                                     ttl_s=s.rating_cache_ttl_s):
-            if ratings.fold(card.name) not in ratings.fold(f"{r.title} {r.content}"):
-                continue  # a page about another place
-            safe, blocked = spotlight.sanitize(f"{r.title}: {r.content}")
-            if not blocked:
-                results.append(spotlight.tag(safe, source=ratings.site_name(r.url)))
-                evidence.append(f"{safe} ({r.url})")
+    """Questions about a place outside the guide (an earlier web/OSM pick or one the user names):
+    what is known about it plus web results about it. "What should I order?" gets the dishes instead."""
+    ctx, card, s = state["context"], _lookup_target(state), get_settings()
+    if asks_for_dishes(state["message"]):
+        return await _dishes_answer(state, card)
+    details = json.dumps(card.model_dump(exclude_none=True, exclude={"n", "id"}), ensure_ascii=False)
+    results, page_evidence = await _pages_about(card)
+    evidence = [details, *page_evidence]
     user = (
         f"Answer language: {ctx.language}\n"
         f"User message: {state['message']}\n"
@@ -280,9 +324,30 @@ async def recall(state: ChatState) -> dict:
     answer = await text_call(load_prompt("recall"), user, temperature=0)
     route = state["route"] + ["recall"] + (["recall:web"] if results else [])
     if s.enable_grounding_check:
-        answer, revised = await grounding.enforce(state["message"], answer, evidence)
+        answer, revised = await grounding.enforce(state["message"], answer, evidence, ctx.language)
         route.append("grounding:revised" if revised else "grounding:ok")
     return {"answer": answer, "route": route, "evidence": evidence}
+
+
+async def _dishes_answer(state: ChatState, card: memory.CardRef) -> dict:
+    """The dishes pages about the place name, each with its link, in fixed text.
+
+    No free LLM text on purpose: asked to introduce the list, Nova Lite repeated it, called the dishes
+    "typical" and wrote placeholders such as <link_to_menu>; its grounding check also removed dishes
+    the evidence did list. Every dish here was found literally in the page it links to.
+    """
+    ctx = state["context"]
+    found = await dishes.find_dishes(card.name, card.location)
+    route = state["route"] + ["recall", f"recall:dishes:{len(found)}"]
+    if not found:
+        return {"answer": t(ctx, "no_dishes").format(name=card.name), "route": route, "evidence": []}
+    by_page: dict[tuple[str, str], list[str]] = {}
+    for d in found:
+        by_page.setdefault((d.site, d.url), []).append(d.name)
+    lines = [t(ctx, "dishes").format(name=card.name),
+             *(f"- {', '.join(names)} · [{site}]({url})" for (site, url), names in by_page.items())]
+    return {"answer": "\n".join(lines), "route": route,
+            "evidence": [f"Dish named on {d.site}: {d.name} ({d.url})" for d in found]}
 
 
 async def respond(state: ChatState) -> dict:

@@ -51,10 +51,7 @@ def get_culinary_map() -> str:
 def get_restaurant_info(restaurant_name: ShortText) -> dict:
     """Search for a restaurant by name and return its structured details
     including cuisine, rating, price range, and signature dish."""
-    query = restaurant_name.lower().strip()
-    matches = [
-        r for r in data.load_restaurants() if query in r["name"].lower() or r["name"].lower() in query
-    ]
+    matches = data.find_restaurants(restaurant_name)
     if not matches:
         return {
             "status": "not_found",

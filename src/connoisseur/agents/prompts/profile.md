@@ -13,7 +13,7 @@ Fields:
   - "restaurant": wants restaurant recommendations ("where should I eat", "find a moody spot")
   - "recipe": wants something to cook ("how do I make lasagna", "easy dinner recipe")
   - "both": wants restaurants and recipes ("dinner ideas")
-  - "lookup": asks about a specific restaurant by name or its reviews ("tell me about Sakura Garden"), or about one of the previous recommendations ("tell me more about the second one", "¿el primero tiene terraza?")
+  - "lookup": asks about a specific restaurant by name, its reviews or what to order there ("tell me about Sakura Garden", "¿qué platos me recomiendas en Carmen?"), or about one of the previous recommendations ("tell me more about the second one", "¿el primero tiene terraza?")
   - "clarification": greeting, thanks, or asks what you can do
   - "database": wants to add, edit or delete restaurants
   - "out_of_scope": anything unrelated to food, restaurants or cooking (writing code, homework, weather, sports, news, general knowledge)

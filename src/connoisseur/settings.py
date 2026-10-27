@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     web_discovery_results: int = 8
     web_search_radius_m: int = 2000
     web_max_places: int = 8
+    # "What should I order at X?": one Tavily search over any site (menus live on the restaurant's own page)
+    dish_search_results: int = 6
+    max_dishes: int = 6
     http_timeout_s: float = 20.0
     cache_dir: Path = Field(default=PROJECT_DIR / ".cache")
     cache_ttl_s: int = 24 * 3600

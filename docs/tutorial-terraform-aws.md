@@ -369,6 +369,7 @@ Para activarlo, en GitHub entra a **Settings → Secrets and variables → Actio
 | Variable | Valor |
 |---|---|
 | `AWS_DEPLOY_ROLE_ARN` | `terraform output -raw github_deploy_role_arn` |
+| `AWS_PR_ROLE_ARN` | `terraform output -raw github_pr_role_arn`. Sirve para que la construcción de la imagen en los PR inicie sesión en ECR Public, porque sin sesión choca con `429 Data limit exceeded`. Ese rol no tiene acceso a nada de tu cuenta |
 | `AWS_REGION` | `us-east-1` |
 | `ECR_REPOSITORY` | `connoisseur-prod` |
 | `LAMBDA_FUNCTIONS` | `connoisseur-prod-api`. Si activas el MCP público: `connoisseur-prod-api connoisseur-prod-mcp` |

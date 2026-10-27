@@ -45,7 +45,7 @@ jobs:
           registry-type: public
         env:
           AWS_REGION: us-east-1 # ECR Public only issues tokens in us-east-1
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - id: image
         run: echo "uri=${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY || 'connoisseur-prod' }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6

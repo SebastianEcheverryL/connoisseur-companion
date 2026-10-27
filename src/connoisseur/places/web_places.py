@@ -7,6 +7,7 @@ cites, results that look like prompt injection are dropped before the LLM sees t
 parsed with regular expressions from results about that one place.
 """
 import hashlib
+import re
 
 from connoisseur.log import get_logger
 from connoisseur.observability import traced
@@ -25,8 +26,13 @@ NOT_PLACES = {fold(name) for name in SITE_NAMES.values()} | {"restaurant", "rest
 
 
 def discovery_query(ctx: UserContext, area: str) -> str:
-    wanted = ctx.search_query.strip() or " ".join(ctx.cuisines) or "restaurants"
-    return f"best {wanted} restaurants in {area}"
+    wanted = ctx.search_query.strip() or " ".join(ctx.cuisines)
+    # The profile's query often says it already: "casual Colombian restaurants in Medellín" became
+    # "best casual Colombian restaurants in Medellín restaurants in Medellín"
+    wanted = re.sub(rf"\b(?:in|en|near|cerca de)\s+{re.escape(area)}\b|\brestaurants?\b|\brestaurantes?\b", " ",
+                    wanted, flags=re.IGNORECASE)
+    wanted = " ".join(wanted.split())
+    return f"best {wanted} restaurants in {area}" if wanted else f"best restaurants in {area}"
 
 
 def ground_places(extraction: WebPlaceExtraction | None, results: list[tavily.WebSnippet],

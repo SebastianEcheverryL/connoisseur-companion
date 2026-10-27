@@ -35,6 +35,15 @@ def extraction(*items):
                                        for n, c, r in items])
 
 
+@pytest.mark.parametrize(("query", "expected"), [
+    ("casual sushi", "best casual sushi restaurants in Medellín"),
+    ("casual Colombian restaurants in Medellín", "best casual Colombian restaurants in Medellín"),
+    ("restaurantes en Medellín", "best restaurants in Medellín"),
+])
+def test_discovery_query_does_not_repeat_the_city(query, expected):
+    assert web_places.discovery_query(CTX.model_copy(update={"search_query": query}), "Medellín") == expected
+
+
 def test_names_must_appear_in_the_result_they_cite():
     places = web_places.ground_places(
         extraction(("Sushi Gozen", None, 0), ("Invented Sushi Palace", None, 0), ("Kai Sushi Bar", "Japanese", 1)),

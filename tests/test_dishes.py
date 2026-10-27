@@ -47,6 +47,7 @@ def test_duplicates_bad_indexes_the_restaurant_name_and_the_limit():
     "¿qué platos me recomiendas de Carmen?", "qué pido en el segundo", "¿cuál es su especialidad?",
     "what should I order at Kai?", "What dishes are good there?", "¿tienen menú vegano?",
     "¿Qué me recomiendas pedir en Hacienda Origen?", "what do people order there?",
+    "What is good to eat there?", "¿Qué tal es la comida del tercero?",
 ])
 def test_dish_questions_are_detected(text):
     assert nodes.asks_for_dishes(text)
@@ -114,7 +115,10 @@ async def test_injected_pages_never_reach_the_extractor(web, monkeypatch):
 def test_named_places_outside_the_guide_are_researched_on_the_web(monkeypatch):
     monkeypatch.setattr(tavily, "is_enabled", lambda: True)
     assert nodes.route_intent(named_lookup("¿qué pido en Carmen?")) == "recall"
-    assert nodes.route_intent(named_lookup("¿qué pido en Sakura Garden?", name="Sakura Garden")) == "tool_agent"
+    assert nodes.route_intent(named_lookup("cuéntame de Carmen")) == "recall"
+    # Guide places: the tool agent for general questions, recall (guide signatures) for dishes
+    assert nodes.route_intent(named_lookup("¿tiene buenas reseñas?", name="Sakura Garden")) == "tool_agent"
+    assert nodes.route_intent(named_lookup("¿qué pido en Sakura Garden?", name="Sakura Garden")) == "recall"
     assert nodes.route_intent(named_lookup("cuéntame más", name=None)) == "tool_agent"
 
 
@@ -136,6 +140,116 @@ async def test_dish_questions_say_when_no_dishes_were_found(web):
     out = await nodes.recall(named_lookup("¿qué platos me recomiendas de Carmen?"))
     assert out["answer"].startswith("No encontré en la web qué platos sirve Carmen")
     assert out["route"] == ["recall", "recall:dishes:0"] and "Ajiaco" not in out["answer"]
+
+
+CARDS = [memory.CardRef(n=1, type="restaurant", id="web:a", name="Della Nonna", location="Medellín"),
+         memory.CardRef(n=2, type="restaurant", id="web:b", name="POMO D'ORO", location="Medellín"),
+         memory.CardRef(n=1, type="recipe", id="recipe:1", name="Lasagna"),
+         memory.CardRef(n=3, type="restaurant", id="dataset:1000001", name="The Gilded Artichoke")]
+
+
+@pytest.mark.parametrize(("text", "position"), [
+    ("¿Qué platos me recomiendas del primero?", 1), ("the second one", 2), ("y en la tercera", 3),
+    ("the 2nd", 2), ("el número 3", 3), ("#2", 2), ("el último", -1), ("Della Nonna", None),
+])
+def test_positions_in_follow_ups(text, position):
+    assert nodes._ordinal(text) == position
+
+
+@pytest.mark.parametrize(("name", "pointer"), [
+    ("the first one", True), ("el segundo", True), ("ese lugar", True), ("that place", True),
+    ("Della Nonna", False), ("Restaurante Romero", False), ("El Cielo", False), (None, False),
+])
+def test_names_that_only_point_back(name, pointer):
+    assert nodes._is_reference(name) is pointer
+
+
+@pytest.mark.parametrize(("name", "message", "expected"), [
+    ("the first one", "¿Qué platos me recomiendas del primero?", "Della Nonna"),  # Nova copies the pointer
+    (None, "what should I order at the second one?", "POMO D'ORO"),
+    ("el último", "¿y del último?", "The Gilded Artichoke"),
+    ("pomo d'oro", "¿qué pido allí?", "POMO D'ORO"),
+    ("Carmen", "¿Carmen es la primera opción?", None),  # a real name wins over a position in the text
+])
+def test_follow_ups_find_the_card_by_name_or_position(name, message, expected):
+    state = {"context": UserContext(intent="lookup", restaurant_name=name), "message": message, "last_cards": CARDS}
+    card = nodes._previous_card(state)
+    assert (card.name if card else None) == expected
+
+
+def test_there_means_the_place_the_last_answer_talked_about():
+    history = [{"role": "user", "content": "What dishes do you recommend at the second one?"},
+               {"role": "assistant", "content": "These are the dishes of **POMO D'ORO** mentioned on the web: ..."}]
+    state = {"context": UserContext(intent="lookup"), "message": "What is good to eat there?", "last_cards": CARDS,
+             "history": history}
+    assert nodes._previous_card(state).name == "POMO D'ORO"
+    state["message"] = "What is good to eat?"  # no pointer: not enough to pick one of several places
+    assert nodes._previous_card(state) is None
+
+
+def test_placeholders_are_not_restaurant_names():
+    from connoisseur.schemas import PROFILE_DEFAULTS, ProfileExtraction
+
+    for slot in ("<<Previous recommendations[0].name>>", "[restaurant name]", "{name}"):
+        extracted = ProfileExtraction.model_validate({**PROFILE_DEFAULTS, "restaurant_name": slot})
+        assert extracted.restaurant_name is None
+
+
+async def test_a_pointer_copied_from_an_earlier_turn_is_dropped(monkeypatch):
+    from connoisseur.schemas import PROFILE_DEFAULTS, ProfileExtraction
+
+    async def structured_call(schema, system, user):  # what Nova returned after "¿De cuál restaurante...?"
+        return ProfileExtraction.model_validate({**PROFILE_DEFAULTS, "intent": "lookup", "language": "Spanish",
+                                                 "location": "Laureles, Medellín", "cuisines": ["sushi"],
+                                                 "restaurant_name": "the first one"})
+
+    monkeypatch.setattr(nodes, "structured_call", structured_call)
+    out = await nodes.profile({"message": "Busco sushi en Laureles, Medellín", "history": [], "route": []})
+    assert out["context"].intent == "restaurant" and out["context"].restaurant_name is None
+    out = await nodes.profile({"message": "¿Qué pido en el primero?", "history": [], "route": []})
+    assert out["context"].intent == "lookup"  # here the message itself points back
+    # Location and cuisine copied from earlier turns do not make a follow-up question a new search
+    out = await nodes.profile({"message": "¿tiene terraza?", "history": [], "route": []})
+    assert out["context"].intent == "lookup"
+
+
+async def test_a_search_read_as_a_lookup_without_a_name_is_a_search(monkeypatch):
+    from connoisseur.schemas import PROFILE_DEFAULTS, ProfileExtraction
+
+    async def structured_call(schema, system, user):
+        return ProfileExtraction.model_validate({**PROFILE_DEFAULTS, "intent": "lookup", "language": "Spanish",
+                                                 "location": "El Poblado, Medellín", "cuisines": ["Italian"]})
+
+    monkeypatch.setattr(nodes, "structured_call", structured_call)
+    out = await nodes.profile({"message": "Busco restaurantes italianos en El Poblado, Medellín", "history": [],
+                               "route": []})
+    assert out["context"].intent == "restaurant"
+
+
+def test_there_means_the_only_restaurant_shown():
+    state = {"context": UserContext(intent="lookup", restaurant_name="ese lugar"), "message": "¿qué pido ahí?",
+             "last_cards": CARDS[:1]}
+    assert nodes._previous_card(state).name == "Della Nonna"
+
+
+async def test_pointing_back_with_nothing_shown_asks_which_place(web):
+    state = named_lookup("¿Qué platos me recomiendas del primero?", name="the first one")
+    assert nodes.route_intent(state) == "recall"
+    out = await nodes.recall(state)
+    assert out["answer"].startswith("¿De cuál restaurante me hablas?")
+    assert out["route"] == ["recall", "recall:no_reference"] and web["queries"] == []
+
+
+async def test_dishes_of_guide_places_come_from_the_guide(web):
+    # An earlier guide pick goes to recall (not the tool agent, which once answered without calling a tool)
+    state = named_lookup("What dishes do you recommend at the third one?", name="the third one", cards=CARDS)
+    assert nodes.route_intent(state) == "recall"
+    out = await nodes.recall(state)
+    assert out["answer"] == ("Estos son los platos insignia de **The Gilded Artichoke** según la Guía Connoisseur:\n"
+                             "- lavender-rubbed roasted chicken\n- delicate heirloom tomato tarts")
+    assert out["route"] == ["recall", "recall:guide_dishes:2"] and web["queries"] == []
+    named = await nodes.recall(named_lookup("¿qué pido en The Gilded Artichoke?", name="the gilded artichoke"))
+    assert named["route"] == ["recall", "recall:guide_dishes:2"]
 
 
 async def test_other_follow_ups_do_not_search_for_dishes(web):

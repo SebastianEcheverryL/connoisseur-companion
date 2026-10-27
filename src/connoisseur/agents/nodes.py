@@ -37,6 +37,8 @@ TEXT = {
         "dishes": "These are the dishes of **{name}** mentioned on the web:",
         "no_dishes": "I couldn't find on the web which dishes {name} serves. Check their menu or reviews "
         "before you go.",
+        "guide_dishes": "These are the signature dishes of **{name}** in the Connoisseur guide:",
+        "which_place": "Which restaurant do you mean? Tell me its name (and the city) and I'll look it up.",
         "allergy_note": "Allergy note: I can't guarantee any dish is free of an allergen. Check the full ingredient "
         "list and ask the restaurant about cross-contamination before eating.",
         "blocked_input": "Sorry, I can't help with that. I'm here for restaurants, food and recipes.",
@@ -73,6 +75,8 @@ TEXT = {
         "dishes": "Estos son los platos de **{name}** que mencionan en la web:",
         "no_dishes": "No encontré en la web qué platos sirve {name}. Te sugiero revisar su menú o sus reseñas "
         "antes de ir.",
+        "guide_dishes": "Estos son los platos insignia de **{name}** según la Guía Connoisseur:",
+        "which_place": "¿De cuál restaurante me hablas? Dime su nombre (y la ciudad) y lo busco.",
         "allergy_note": "Nota sobre alergias: no puedo garantizar que un plato esté libre de un alérgeno. Revisa la "
         "lista completa de ingredientes y pregunta en el restaurante por contaminación cruzada antes de comer.",
         "blocked_input": "Lo siento, no puedo ayudarte con eso. Estoy aquí para restaurantes, comida y recetas.",
@@ -185,7 +189,7 @@ async def text_call(system: str, user: str, temperature: float | None = None) ->
 def _candidate_line(c: PlaceCandidate) -> dict:
     return c.model_dump(
         include={"id", "name", "location", "cuisine", "rating", "rating_source", "review_count", "price_range",
-                 "vibe", "description", "diet_tags"},
+                 "vibe", "description", "diet_tags", "signatures"},
         exclude_none=True,
     )
 
@@ -217,6 +221,15 @@ async def profile(state: ChatState) -> dict:
                           search_query=state["message"][:200])
     else:
         ctx = extracted.to_context()
+    if (ctx.intent == "lookup" and (not ctx.restaurant_name or _is_reference(ctx.restaurant_name))
+            and not _points_in(state["message"])):
+        # After "¿De cuál restaurante me hablas?", Nova Lite took "Busco sushi en Laureles" for a lookup
+        # (and copied "the first one" from the earlier turn): a search names a place or a cuisine itself
+        ctx.restaurant_name = None
+        message = ratings.fold(state["message"])
+        named = [ctx.location.split(",")[0]] if ctx.location else []
+        if ctx.near_me or any(ratings.fold(v) in message for v in [*named, *ctx.cuisines] if v.strip()):
+            ctx.intent = "restaurant"
     named_location = ctx.location
     known = memory.merge_profile(state.get("memory") or memory.Profile(), ctx, state["message"],
                                  extracted.dropped_preferences if extracted else [])
@@ -244,33 +257,101 @@ def route_intent(state: ChatState) -> str:
     if intent == "recipe":
         return "retrieve_local"
     if intent == "lookup":
+        card, name = _previous_card(state), state["context"].restaurant_name
+        if card is None and _points_back(state):
+            return "recall"  # "the first one" with nothing shown before: recall asks which place
+        if (card or name) and asks_for_dishes(state.get("message", "")):
+            # Dishes come from the guide or from web pages, never from the model's memory: the tool
+            # agent sometimes answered without calling a tool and invented them
+            return "recall"
         # The guide's tools only know the curated dataset: earlier web/OSM picks are recalled instead,
-        # and so is a named place outside the guide ("¿qué pido en Carmen?"), researched on the web
-        if card := _previous_card(state):
+        # and so is a named place outside the guide ("cuéntame de Carmen"), researched on the web
+        if card:
             return "tool_agent" if card.id.startswith("dataset:") else "recall"
-        name = state["context"].restaurant_name
         if name and tavily.is_enabled() and not data.find_restaurants(name):
             return "recall"
         return "tool_agent"
     return "respond"
 
 
-def _previous_card(state: ChatState) -> memory.CardRef | None:
-    """The earlier recommendation the user is asking about (the profile agent copies its name)."""
-    wanted = ratings.fold(state["context"].restaurant_name or "")
-    if not wanted:
+_ORDINALS = (
+    (1, r"primer[oa]?|first|1st"), (2, r"segund[oa]|second|2nd"), (3, r"tercer[oa]?|third|3rd"),
+    (4, r"cuart[oa]|fourth|4th"), (5, r"quint[oa]|fifth|5th"), (6, r"sext[oa]|sixth|6th"),
+    (-1, r"[uú]ltim[oa]|last"),
+)
+_ORDINAL = re.compile("|".join(rf"(?P<n{i if i > 0 else 'last'}>\b(?:{p})\b)" for i, p in _ORDINALS)
+                      + r"|(?:#|\bn[uú]mero\s+|\bnumber\s+|\bno\.\s*)(?P<digit>[1-9])\b", re.IGNORECASE)
+# Words that only point at something ("the first one", "ese lugar", "there"): not a restaurant name
+_POINTER_WORDS = {
+    "the", "el", "la", "los", "las", "lo", "del", "de", "that", "this", "ese", "esa", "este", "esta", "one", "ones",
+    "uno", "una", "place", "lugar", "spot", "sitio", "restaurant", "restaurante", "there", "alli", "ahi", "it",
+    "number", "numero", "no", "opcion", "option", "recommendation", "recomendacion",
+}
+
+
+def _ordinal(text: str) -> int | None:
+    """1-based position named in the text ("el segundo", "the 3rd", "#2"); -1 for "the last one"."""
+    if not (match := _ORDINAL.search(text or "")):
         return None
-    for card in state.get("last_cards") or []:
-        name = ratings.fold(card.name)
-        if name and (name == wanted or name in wanted or wanted in name):
-            return card
-    return None
+    if match["digit"]:
+        return int(match["digit"])
+    found = next(key for key, value in match.groupdict().items() if value)
+    return -1 if found == "nlast" else int(found[1:])
 
 
+def _is_reference(name: str | None) -> bool:
+    """True when the "restaurant name" only points at an earlier pick: Nova Lite copied "the first one"."""
+    if not name:
+        return False
+    words = re.findall(r"\w+", ratings.fold(_ORDINAL.sub(" ", name)))
+    return all(word in _POINTER_WORDS for word in words)
+
+
+def _previous_card(state: ChatState) -> memory.CardRef | None:
+    """The earlier recommendation the user is asking about: by name (the profile agent copies it), else by
+    position ("el segundo"), else the only restaurant shown when the user just says "there"."""
+    cards = state.get("last_cards") or []
+    name = state["context"].restaurant_name or ""
+    if wanted := ratings.fold(name):
+        for card in cards:
+            folded = ratings.fold(card.name)
+            if folded and (folded == wanted or folded in wanted or wanted in folded):
+                return card
+    if name and not _is_reference(name):
+        return None  # a real name that was not shown before ("¿y Carmen?")
+    restaurants = [card for card in cards if card.type == "restaurant"]
+    if position := _ordinal(name) or _ordinal(state.get("message", "")):
+        if position == -1:
+            return restaurants[-1] if restaurants else None
+        return next((card for card in restaurants if card.n == position), None)
+    if len(restaurants) == 1:
+        return restaurants[0]
+    # "What is good to eat there?": the place the last answer talked about, when it named only one
+    last = next((turn.get("content", "") for turn in reversed(state.get("history") or [])
+                 if turn.get("role") == "assistant"), "")
+    named = [card for card in restaurants if ratings.fold(card.name) in ratings.fold(last)]
+    return named[0] if len(named) == 1 and _points_in(state.get("message", "")) else None
+
+
+# Unambiguous pointers only: "it" and "this" appear in plenty of general questions ("is it vegan friendly?")
+_POINTER = re.compile(r"\b(es[ea]s?|aquel\w*|that one|that place|there|all[ií]|ah[ií])\b", re.IGNORECASE)
+
+
+def _points_in(message: str) -> bool:
+    """The message itself points at something shown before ("el segundo", "ese lugar", "there")."""
+    return _ordinal(message) is not None or bool(_POINTER.search(message))
+
+
+def _points_back(state: ChatState) -> bool:
+    """The user refers to an earlier pick by position or with "that place" instead of a name."""
+    name = state["context"].restaurant_name
+    return _is_reference(name) or (not name and _points_in(state.get("message", "")))
+
+
+# Only checked for lookups (questions about one place), so food words alone mean "what is good to eat there"
 _DISH_QUESTION = re.compile(
     r"\b(plat(o|os|illo|illos)|dish(es)?|men[uú]s?|carta|especialidad(es)?|specialt(y|ies)|signature|"
-    r"qu[eé] (me )?(pido|ordeno|como|comer|pruebo)|pedir|ordenar|probar|"
-    r"what (to|should i|do you recommend i) (eat|get|try)|order)\b",
+    r"comer|comida|eat|food|pid[oa]|pedir|orden[oa]|ordenar|order|prob[ae]r|pruebo|try)\b",
     re.IGNORECASE,
 )
 
@@ -279,13 +360,28 @@ def asks_for_dishes(text: str) -> bool:
     return bool(_DISH_QUESTION.search(text))
 
 
-def _lookup_target(state: ChatState) -> memory.CardRef:
-    """The earlier pick the user points to, or the place they named (with the city known so far)."""
+def _lookup_target(state: ChatState) -> memory.CardRef | None:
+    """The earlier pick the user points to, or the place they named (with the city known so far).
+    None when they point to an earlier pick that does not exist."""
     if card := _previous_card(state):
         return card
     ctx = state["context"]
-    return memory.CardRef(n=0, type="restaurant", id="web:lookup", name=ctx.restaurant_name or "",
-                          location=ctx.location)
+    if not ctx.restaurant_name or _points_back(state):
+        return None
+    return memory.CardRef(n=0, type="restaurant", id="web:lookup", name=ctx.restaurant_name, location=ctx.location)
+
+
+def _guide_record(card: memory.CardRef) -> dict | None:
+    """The guide's entry for an earlier guide pick or a name the user wrote ("Sakura Garden")."""
+    if card.id.startswith("dataset:"):
+        return next((r for r in data.load_restaurants() if f"dataset:{r['itemId']}" == card.id), None)
+    if card.id != "web:lookup":
+        return None
+    matches = data.find_restaurants(card.name)
+    exact = [r for r in matches if ratings.fold(r["name"]) == ratings.fold(card.name)]
+    if len(exact) == 1:
+        return exact[0]
+    return matches[0] if len(matches) == 1 else None  # "La" matches many: not a guide place
 
 
 async def _pages_about(card: memory.CardRef) -> tuple[list[str], list[str]]:
@@ -310,6 +406,9 @@ async def recall(state: ChatState) -> dict:
     """Questions about a place outside the guide (an earlier web/OSM pick or one the user names):
     what is known about it plus web results about it. "What should I order?" gets the dishes instead."""
     ctx, card, s = state["context"], _lookup_target(state), get_settings()
+    if card is None:
+        return {"answer": t(ctx, "which_place"), "route": state["route"] + ["recall", "recall:no_reference"],
+                "evidence": []}
     if asks_for_dishes(state["message"]):
         return await _dishes_answer(state, card)
     details = json.dumps(card.model_dump(exclude_none=True, exclude={"n", "id"}), ensure_ascii=False)
@@ -337,6 +436,12 @@ async def _dishes_answer(state: ChatState, card: memory.CardRef) -> dict:
     the evidence did list. Every dish here was found literally in the page it links to.
     """
     ctx = state["context"]
+    if record := _guide_record(card):
+        signatures = record.get("signatures") or []
+        lines = [t(ctx, "guide_dishes").format(name=record["name"]), *(f"- {dish}" for dish in signatures)]
+        return {"answer": "\n".join(lines) if signatures else t(ctx, "no_dishes").format(name=record["name"]),
+                "route": state["route"] + ["recall", f"recall:guide_dishes:{len(signatures)}"],
+                "evidence": [data.restaurant_text(record)]}
     found = await dishes.find_dishes(card.name, card.location)
     route = state["route"] + ["recall", f"recall:dishes:{len(found)}"]
     if not found:

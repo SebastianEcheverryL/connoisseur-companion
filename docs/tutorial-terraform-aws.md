@@ -39,7 +39,7 @@ Navegador ──► Vercel (Next.js)
         Lambda "connoisseur-prod-api"  (imagen de contenedor desde ECR)
           FastAPI + LangGraph + índice ChromaDB + modelos ONNX dentro de la imagen
                 ├─► Bedrock: Amazon Nova Lite (el LLM) y Bedrock Guardrails
-                ├─► DynamoDB: cuotas por usuario (mensajes por minuto y por día)
+                ├─► DynamoDB: cuotas por usuario y memoria (perfil del chat, preferencias guardadas)
                 ├─► SSM Parameter Store: llaves de Langfuse, Tavily y el token MCP
                 ├─► OpenStreetMap y Tavily (búsqueda web)
                 └─► CloudWatch (logs, métricas, alarmas)  +  Langfuse Cloud (trazas de los agentes)
@@ -62,12 +62,12 @@ Precios de us-east-1 en octubre de 2026. Revisa la [página de precios](https://
 | Bedrock Nova Lite | $0,06 por millón de tokens de entrada, $0,24 por millón de salida | ~$1,50 por cada mil mensajes |
 | Bedrock Guardrails | Filtros de contenido $0,15 por cada 1.000 unidades de texto. Una unidad son 1.000 caracteres | ~$0,50 por cada mil mensajes |
 | ECR | $0,10 por GB al mes de imágenes guardadas | ~$0,10 a $0,30 al mes |
-| DynamoDB | Bajo demanda, por escritura | Centavos al mes |
+| DynamoDB | Bajo demanda, por lectura y escritura. Cada mensaje suma 2 contadores de cuota y la memoria (unas 2 lecturas y 2 escrituras) | Centavos al mes |
 | CloudWatch | Logs $0,50 por GB. Las primeras 10 alarmas y 3 dashboards son gratis | Centavos al mes |
 | SSM Parameter Store | Nivel estándar | $0 |
 | S3 (estado de Terraform) | Por GB guardado | Menos de $0,01 |
 | AWS Budgets | Los dos primeros presupuestos son gratis | $0 |
-| Vercel Hobby, Langfuse Cloud Hobby, Tavily free | Planes gratuitos | $0 |
+| Vercel Hobby, Langfuse Cloud Hobby, Tavily free | Planes gratuitos. Tavily da 1.000 créditos al mes: una búsqueda web gasta de 1 a 4 (descubrir lugares y sus calificaciones), y todo queda en caché | $0 |
 
 **Total esperado: de $1 a $5 al mes** con uso de demo. Sin tráfico, unos centavos.
 
@@ -96,7 +96,7 @@ También necesitas:
 - Una cuenta de AWS. No uses el usuario raíz para el día a día.
 - Una cuenta de Vercel con el repositorio de GitHub conectado.
 - Una cuenta de [Langfuse Cloud](https://cloud.langfuse.com) (plan Hobby gratis) para las trazas. Es opcional pero recomendado.
-- Tu llave de [Tavily](https://tavily.com) si quieres calificaciones de reseñas. También opcional.
+- Tu llave de [Tavily](https://tavily.com). Es opcional, pero sin ella no hay calificaciones de reseñas, y cuando los servidores públicos de OpenStreetMap (Overpass) están caídos, que pasa seguido, la búsqueda web casi no encuentra lugares.
 
 ## 4. Credenciales de AWS
 
@@ -325,7 +325,7 @@ Remove-Item body.json
 | **Lambda → connoisseur-prod-api** | En *Configuration → Function URL*: auth type `AWS_IAM` e invoke mode `RESPONSE_STREAM`. En *Environment variables*: ninguna llave, solo nombres y rutas |
 | **Lambda → Monitor** | Las invocaciones de tus pruebas |
 | **CloudWatch → Log groups → /aws/lambda/connoisseur-prod-api** | Una línea JSON por evento. Busca `ssm_parameters_loaded` para ver qué secretos se cargaron. Muestra los nombres, nunca los valores |
-| **DynamoDB → Tables → connoisseur-prod-quotas → Explore items** | Contadores `rpm:` y `day:` por usuario |
+| **DynamoDB → Tables → connoisseur-prod-quotas → Explore items** | Contadores `rpm:` y `day:` por usuario. Después de chatear con sesión iniciada: `conv:user:github:<id>:<chat>` (el perfil de esa conversación) y `mem:user:github:<id>` (ciudad, dieta y alergias guardadas). El atributo `data` es un JSON sin mensajes ni coordenadas. "Olvidar mis preferencias" en la web borra el `mem:` y el `conv:` de ese chat |
 | **Bedrock → Guardrails → connoisseur-prod** | La versión 1 y sus filtros. En *Test* puedes probar mensajes |
 | **CloudWatch → Dashboards → connoisseur-prod** | Invocaciones, latencia, tokens de Bedrock y señales de abuso |
 | **CloudWatch → Alarms** | 6 alarmas en estado `OK` o `Insufficient data` |
@@ -422,6 +422,8 @@ Las alarmas envían correo cuando:
 | En GitHub Actions: `Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity` | El flujo no corrió en `main`, o el repo usa *immutable subjects*: GitHub manda `repo:Usuario@id/repo@id` y el rol espera `repo:Usuario/repo` | Lanza el flujo en `main`. Si el repo usa *immutable subjects*, pon su prefijo en `github_oidc_sub_prefix` (paso 6) y aplica |
 | `ImageTagAlreadyExistsException` | Las etiquetas son inmutables | Usa una etiqueta nueva, por ejemplo el hash del commit |
 | `Error acquiring the state lock` | Otro `terraform apply` quedó a medias | Si estás seguro de que no corre otro: `terraform force-unlock <ID>` |
+| `memory_save_failed` con `AccessDeniedException` en los logs | La imagen nueva llegó antes que el permiso `ReadWriteMemory` del rol | `terraform apply`. Mientras tanto el chat funciona, pero no recuerda nada entre mensajes |
+| La búsqueda web responde sin lugares (ruta `web:none` en los logs) | Overpass caído y Tavily sin resultados: falta la llave, se acabaron los créditos del mes, o el lugar es muy pequeño | Revisa `TAVILY_API_KEY` en SSM y los créditos en el panel de Tavily. Busca `tavily_error` en CloudWatch |
 | `/health` responde `"tracing": false` | Las llaves de Langfuse siguen en `CHANGE_ME`, o la Lambda arrancó antes de cargarlas | Revisa el paso 10 y fuerza un arranque nuevo |
 | La primera pregunta da timeout en Vercel | El arranque en frío más el tiempo de los agentes | Reintenta. Las siguientes son más rápidas. Las respuestas ya llegan por streaming |
 | No llegan las alertas | La suscripción SNS no se confirmó | Busca el correo de *AWS Notifications*, también en spam |

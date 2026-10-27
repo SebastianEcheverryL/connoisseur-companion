@@ -11,6 +11,8 @@ Run on 2026-10-22 on a laptop: `llama3.1` 8B (Ollama) as the agent model and as 
 | End to end | 20 / 21 deterministic checks; tool choice 100%; relevance 4.8 / 5 | Routing, tools, refusals and safety behave as designed |
 | Hallucination rate (tool agent) | **27% → 7%** with the grounding check | The fix for the red team's open finding works, but is not perfect |
 | Judge reliability | 0.83–0.92 agreement with hand labels | Groundedness numbers are a trend, not an exact score |
+| Memory (multi-turn, Nova Lite) | 9 / 9 conversations, every turn check passed (after 3 fixes found by the suite) | Place, diet and allergies survive follow-ups and new chats; "the second one" resolves; "forget" forgets |
+| Web discovery with Overpass down | Passed: 3 real places from recorded listings, none invented, 11 s | The fallback that was missing in production works |
 
 ## Retrieval (no LLM)
 
@@ -94,13 +96,32 @@ Questions the guide cannot answer, asked 5 times each through the full system:
 
 The grounding check (one extra LLM call on the tool-agent path) removes most invented facts. It is enabled by default. It does not catch everything: one reservations answer in five still claims something the data lacks, so the red team's finding is **mitigated, not closed**.
 
+## Memory and web discovery (2026-10-26, Bedrock Nova Lite)
+
+Added after testing the deployed app: follow-ups lost the place, allergies only counted in the message that said them, and web searches found nothing when Overpass was down. Agent model `us.amazon.nova-lite-v1:0`, guardrails `local`, recorded web data.
+
+**Multi-turn suite** (9 conversations, 22 turns, one signed-in user per conversation):
+
+| Run | Conversations passed | Turn checks passed | What changed before it |
+|---|---|---|---|
+| v1 | 9 / 9 | 100% | First version of the checks |
+| v2 | 8 / 9 | 97.5% | Stricter checks (`understood_excludes`) after reading the v1 answers; rules for price words, vibe length and topic switches |
+| v3 | 8 / 9 | 97.5% | Profile prompt: previous picks are only for references, a new topic starts over |
+| v4 | **9 / 9** | **100%** | Code rule: after a topic switch, only cuisines the message names count |
+
+v1 passed every check, but its answers showed that **memory made extraction mistakes stick** for the whole conversation: an invented `$$$` budget for "dinner", "noodles" from a recipe question carried into a restaurant search, a whole sentence ("Soy alérgico al maní.") as the occasion, and a previous card's cuisine copied into the profile. The checks were extended to catch them, then fixed: rules in `memory.merge_profile` for the first three, the prompt for the fourth. "Noodles" survived the prompt fix (Nova Lite re-read it from the history) and needed the code rule.
+
+**Overpass down** (`e22`, recorded Tavily listings): route `web → web:tavily`, cards ONI Nikkei, Kuro Sushi Bar and WAN Restaurant, every name present in the results. The judge flagged "ONI Nikkei is a sushi restaurant" as unsupported although the listing says "ONI Nikkei - sushi medellin Sushi, Restaurant": a judge miss, the same kind seen in the calibration.
+
 ## Bugs the evaluations found in the product
 
 - **Allergy safety gap.** The recommender wrote "Thai Basil Chicken is a *peanut-free option*". The safety filter only removed "is peanut-free" without an article. Fixed in `security/allergens.py`, with a test.
 - **Off-topic misrouting.** Coding requests were classified as database requests. Fixed in the profile prompt.
+- **Shared eval session.** Every end-to-end case used the session `evals`; with conversation memory, one case would inherit the place or allergies of the previous one. Each case now gets its own session.
+- **Sticky extraction mistakes.** See the multi-turn section: invented budgets, topic leaks and copied sentences, fixed with rules and checked by the suite.
 
 ## Next steps
 
-1. Re-run with a stronger judge (a Bedrock model in phase 6) and compare Ollama vs Bedrock as the agent model.
+1. Re-run every suite with Nova Lite (the multi-turn suite already runs on it) and a stronger judge, and compare against `llama3.1`.
 2. Apply the grounding check to the recommender's free text.
 3. Add BM25 hybrid search and more visual queries, then revisit the fusion weight.

@@ -48,6 +48,9 @@ _CLAIM = re.compile(
     r"|free (of|from) [\w\s-]*(allergen|peanut|nut|gluten|dairy|shellfish)"
     r"|(es|son|está|están)\s+(totalmente\s+|completamente\s+)?(libre|libres) de"
     r"|segur[oa]s? para (tu|tus|personas con)[^.!?\n]*alergi"
+    # Only applied when the user has an allergy: Nova 2 Lite wrote "una opción deliciosa y segura" and
+    # "This dish is safe for you". "Seguro que te encantará" (surely) is not a safety claim.
+    r"|safe (for|to eat|choice|option|pick|bet)\b|\bsegur(a|as|os)\b|\bseguro\b(?!\s+(de\s+)?que\b)"
     r")[^.!?\n]*[.!?]?",
     re.IGNORECASE,
 )

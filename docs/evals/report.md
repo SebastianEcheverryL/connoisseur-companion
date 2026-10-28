@@ -1,6 +1,6 @@
 # Evaluation report
 
-Run on 2026-10-22 on a laptop: `llama3.1` 8B (Ollama) as the agent model and as the judge, guardrails `local`, expert agents off. How each suite works: [README.md](README.md).
+Runs in date order. The first sections (2026-10-22) used `llama3.1` 8B on Ollama on a laptop as the agent model and as the judge, guardrails `local`, expert agents off. Later sections ran the agents on Amazon Bedrock and say so in their heading; the judge stayed `llama3.1` so scores stay comparable. How each suite works: [README.md](README.md).
 
 ## Summary
 
@@ -13,6 +13,8 @@ Run on 2026-10-22 on a laptop: `llama3.1` 8B (Ollama) as the agent model and as 
 | Judge reliability | 0.83–0.92 agreement with hand labels | Groundedness numbers are a trend, not an exact score |
 | Memory (multi-turn, Nova Lite) | 9 / 9 conversations, every turn check passed (after 3 fixes found by the suite) | Place, diet and allergies survive follow-ups and new chats; "the second one" resolves; "forget" forgets |
 | Web discovery with Overpass down | Passed: 3 real places from recorded listings, none invented, 11 s | The fallback that was missing in production works |
+| Model choice (Bedrock) | Nova 2 Lite 100% on the profile suite (Nova Lite 90%); 14 / 14 multi-turn with the orchestrator | Nova 2 Lite + orchestrator deployed |
+| End to end, production config (Nova 2 Lite) | 21 / 22 checks; median **5.4 s** (llama3.1 laptop: 28.5 s); relevance 4.9 / 5; judge groundedness 0.33 | Faster and as correct on behaviour; the recommender's free text embellishes more (see below) |
 
 ## Retrieval (no LLM)
 
@@ -146,6 +148,32 @@ What the runs caught, all fixed with a test:
 - **Unrequested work.** The orchestrator added the steps of the first pasta to a plain "dame una receta de pasta" list and repeated a web recipe; steps are fetched in the same turn only when the user asks how to cook.
 - **Allergy wording.** Nova 2 Lite called a dish "segura" for a peanut allergy; the safety-claim filter now removes bare "segura" / "safe for" sentences.
 
+## Production configuration end to end (2026-10-28, Bedrock)
+
+The 22 end-to-end cases against the deployed configuration: Nova 2 Lite with the orchestrator, Bedrock Guardrails with the local injection screen in front, grounding check on, expert agents off, recorded web data. Judge `llama3.1` on Ollama, as in the first runs.
+
+| Metric | `llama3.1` 8B, fixed routing (2026-10-22) | Nova 2 Lite + orchestrator |
+|---|---|---|
+| Deterministic checks passed | 20 / 21 | **21 / 22** |
+| Tool selection accuracy | 1.0 | 1.0 |
+| Relevance, judge (1-5) | 4.75 | **4.92** |
+| Groundedness, judge mean | 0.60 | 0.33 |
+| Median latency | 28.5 s | **5.4 s** |
+
+The only failed check is `e20`, the known Prompt Guard false positive on "Delete Sakura Garden from your database". Every grounding question (reservations, hours, phone number) was answered without inventing the fact.
+
+**Why groundedness dropped.** Reading the unsupported claims shows two things:
+
+- **Judge misses.** "The Gilded Rose has a rating of 4.1/5" and "a price range of $$$" are flagged although the candidate record has `"rating": 4.1, "price_range": 3`. The 8B judge struggles with JSON records that hold many candidates.
+- **Real embellishment by the recommender.** For "un restaurante italiano romántico en Pasadena" the guide has no Italian place in Pasadena; Nova 2 Lite called The Gilded Rose (cuisine "Victorian excess") and The Copper Pot ("dining room") "romantic Italian restaurants". It writes longer reasons than `llama3.1`, with more claims per pick, and the grounding check does not cover the recommender yet. This is now the first next step.
+
+What this run caught, all fixed with a test:
+
+- **Allergy claim in new words.** For a severe peanut allergy, the answer said a curry was "a great choice for a peanut-free meal" and that its ingredients "don't contain peanuts". The claim filter now removes any "x-free" wording and "does not contain" / "no contiene" sentences when the user has an allergy.
+- **The judge never ran.** The first attempt reported "0 judged": with `LLM_PROVIDER=bedrock` the judge asked Bedrock for a model called `llama3.1` and the error was swallowed. The judge now always runs on Ollama and logs `judge_failed`.
+- **Inflated latencies.** The first attempt showed a 45 s median. A local `.env` named the Langfuse URL `LANGFUSE_BASE_URL` (the SDK's name), the app only read `LANGFUSE_HOST`, and every trace export waited for a timeout on `localhost`. Both names are accepted now; production was not affected.
+- **A correct "I don't know" counted as a claim.** "I don't have access to reservation policies… To check if they take reservations…" failed `e03`; the unknown-answer pattern now covers it.
+
 ## Bugs the evaluations found in the product
 
 - **Allergy safety gap.** The recommender wrote "Thai Basil Chicken is a *peanut-free option*". The safety filter only removed "is peanut-free" without an article. Fixed in `security/allergens.py`, with a test.
@@ -155,6 +183,6 @@ What the runs caught, all fixed with a test:
 
 ## Next steps
 
-1. Re-run every suite with Nova Lite (the multi-turn suite already runs on it) and a stronger judge, and compare against `llama3.1`.
-2. Apply the grounding check to the recommender's free text.
+1. Apply the grounding check to the recommender's free text, or build each pick's reason from its record fields: the production run shows Nova 2 Lite calling non-Italian places "Italian".
+2. A stronger judge for multi-candidate evidence (or a judge per candidate), then re-calibrate it.
 3. Add BM25 hybrid search and more visual queries, then revisit the fusion weight.

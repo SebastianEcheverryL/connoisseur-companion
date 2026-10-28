@@ -125,8 +125,14 @@ def t(ctx: UserContext | None, key: str) -> str:
     return t_lang(ctx.language if ctx else "English", key)
 
 
+# Other names the profile model may give the two languages ("Español", "es")
+_LANGUAGE_ALIASES = {"espanol": "Spanish", "castellano": "Spanish", "es": "Spanish", "en": "English",
+                     "ingles": "English"}
+
+
 def t_lang(language: str, key: str) -> str:
-    return TEXT.get(language.strip().capitalize(), TEXT["English"])[key]
+    folded = ratings.fold(language.strip())
+    return TEXT.get(_LANGUAGE_ALIASES.get(folded, folded.capitalize()), TEXT["English"])[key]
 
 
 _SPANISH_HINTS = re.compile(r"[ñ¿¡áéíóú]|\b(que|quiero|dime|c[oó]mo|d[oó]nde|para|por favor|hola|recomi[eé]ndame)\b",
@@ -395,7 +401,13 @@ _ORDINALS = (
     (4, r"cuart[oa]|fourth|4th"), (5, r"quint[oa]|fifth|5th"), (6, r"sext[oa]|sixth|6th"),
     (-1, r"[uú]ltim[oa]|last"),
 )
-_ORDINAL = re.compile("|".join(rf"(?P<n{i if i > 0 else 'last'}>\b(?:{p})\b)" for i, p in _ORDINALS)
+# "mi primera vez", "my first anniversary", "last night", "first of all", "por último": not a position
+_NOT_POSITION_AFTER = (r"(?!\s+(?:vez|veces|times?|nights?|noches?|days?|d[ií]as?|weeks?|semanas?|months?|mes|"
+                       r"years?|a[nñ]os?|anniversary|aniversario|birthday|cumplea[nñ]os|dates?|citas?|visits?|"
+                       r"visitas?|trips?|viajes?|plato|course|of all|de todo|que todo|que nada)\b)")
+_NOT_POSITION_BEFORE = r"(?<!\bpor\s)(?<!\bat\s)"
+_ORDINAL = re.compile("|".join(rf"(?P<n{i if i > 0 else 'last'}>{_NOT_POSITION_BEFORE}\b(?:{p})\b"
+                               rf"{_NOT_POSITION_AFTER})" for i, p in _ORDINALS)
                       + r"|(?:#|\bn[uú]mero\s+|\bnumber\s+|\bno\.\s*)(?P<digit>[1-9])\b", re.IGNORECASE)
 # Words that only point at something ("the first one", "ese lugar", "there"): not a restaurant name
 _POINTER_WORDS = {

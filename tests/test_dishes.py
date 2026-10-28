@@ -151,9 +151,19 @@ CARDS = [memory.CardRef(n=1, type="restaurant", id="web:a", name="Della Nonna", 
 @pytest.mark.parametrize(("text", "position"), [
     ("¿Qué platos me recomiendas del primero?", 1), ("the second one", 2), ("y en la tercera", 3),
     ("the 2nd", 2), ("el número 3", 3), ("#2", 2), ("el último", -1), ("Della Nonna", None),
+    ("el segundo restaurante", 2), ("the last one you said", -1), ("y el primero qué tal?", 1),
+    # Ordinal words that are not positions in a list: a new request must not become a follow-up
+    ("es mi primera vez en Medellín, quiero sushi", None), ("recomiéndame algo para mi primer aniversario", None),
+    ("what did you eat last night? any dinner ideas", None), ("first of all, I'm vegan", None),
+    ("por último, algo barato", None), ("at last a free evening, where can I eat?", None),
 ])
 def test_positions_in_follow_ups(text, position):
     assert nodes._ordinal(text) == position
+
+
+@pytest.mark.parametrize("language", ["Spanish", "spanish", "Español", "es", "Castellano"])
+def test_fixed_text_follows_other_names_of_spanish(language):
+    assert nodes.t_lang(language, "which_place") == nodes.TEXT["Spanish"]["which_place"]
 
 
 @pytest.mark.parametrize(("name", "pointer"), [

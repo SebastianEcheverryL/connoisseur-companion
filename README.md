@@ -9,6 +9,8 @@ Everything runs locally with [Ollama](https://ollama.com): no paid LLM API is ne
 ## Highlights
 
 - **Profile agent + router.** One structured LLM call extracts intent, location, cuisines, diet, vibe, budget and language, then routes to the right branch.
+- **Hybrid orchestrator (optional).** With `ORCHESTRATOR_ENABLED=true` an LLM chooses, per message, which high-level tools to use (restaurants, one place's info or dishes, recipes, recipe steps, a question back), one or several in a row. Each tool is deterministic and grounded inside and writes its own part of the answer; the orchestrator only sees counts and names tagged as data, so web content cannot steer it. It plans its calls once (plan, then execute) and falls back to the fixed routing on any failure. On the multi-turn suite it serves compound requests the fixed graph cannot (14/14 vs 13/14) for about 2 s more per conversation.
+- **Recipes that follow up.** "¿Cómo preparo la segunda?" returns that recipe's ingredients and steps from the dataset; a dish the dataset lacks ("receta de ajiaco") is read from one web page, and only ingredients and steps found on that page are shown, with the link.
 - **Web-search agent.** Outside California (or when the guide has too few matches) it geocodes the location with Nominatim, finds restaurants with Overpass (falling back to Photon when Overpass is busy), ranks them by cuisine and `diet:*` tags, and, with a Tavily key, researches ratings for the top places on review sites. It is deterministic on purpose: web content never decides which tool runs next.
 - **Researched ratings, not generated ones.** Ratings for web places are parsed with regular expressions from review snippets that mention the place by name, normalised to a 0-5 scale, averaged with one value per site, and shown with their source and link (e.g. "⭐ 4.6/5 Tripadvisor, 1,234 reviews"). The LLM never produces a rating.
 - **"Near me" that is honest.** Browser geolocation is optional and rounded to ~1 km before it leaves the page. Without a position, the agent asks where you are instead of answering from the California guide, and a place named in the message wins over the device position.
@@ -34,10 +36,14 @@ flowchart TD
     G -->|California or no location| L[Local retrieval<br/>ChromaDB + fusion]
     G -->|elsewhere| W[Web-search agent<br/>Overpass / Photon + Tavily]
     L -->|too few results| W
+    P -->|steps of a recipe shown or named| S[Recipe steps<br/>from the dataset]
+    P -->|dish not in the dataset| WR[Web recipe<br/>checked against the page]
     L --> E{{Trend ∥ Style ∥ Nutrition experts}}
     W --> E
     E --> C[Recommender<br/>grounded picks + sources]
 ```
+
+With `ORCHESTRATOR_ENABLED=true`, the profile agent hands over to an orchestrator instead of the fixed arrows: it calls these same branches as tools (`search_restaurants`, `place_info`, `search_recipes`, `recipe_steps`, `ask_user`, `answer_canned`) and joins their sections into one answer ([agents/orchestrator.py](src/connoisseur/agents/orchestrator.py), [agents/skills.py](src/connoisseur/agents/skills.py)).
 
 ```
 Browser ── Next.js (Vercel) ── /api/chat BFF ──► FastAPI
@@ -57,7 +63,8 @@ FastAPI  ── POST /chat (SSE)   ── LangGraph workflow ── Ollama | Bed
 ```
 src/connoisseur/
   api.py              FastAPI app: /chat (SSE), /chat/sync, /mcp, /ui, /health
-  agents/             LangGraph graph, nodes, ReAct tool agent, runner, versioned prompts (*.md)
+  agents/             LangGraph graph, nodes, ReAct tool agent, orchestrator + its tools (skills), runner, prompts (*.md)
+  recipes_web.py      recipes from the web for dishes the dataset lacks, checked against the page
   retrieval/          fastembed embeddings, ChromaDB store, fusion reranker, search service
   places/             OpenStreetMap (Nominatim + Overpass), Tavily, TTL cache
   security/           guardrails, prompt-injection screening, spotlighting, quotas, PII redaction

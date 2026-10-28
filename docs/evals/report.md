@@ -113,6 +113,39 @@ v1 passed every check, but its answers showed that **memory made extraction mist
 
 **Overpass down** (`e22`, recorded Tavily listings): route `web → web:tavily`, cards ONI Nikkei, Kuro Sushi Bar and WAN Restaurant, every name present in the results. The judge flagged "ONI Nikkei is a sushi restaurant" as unsupported although the listing says "ONI Nikkei - sushi medellin Sushi, Restaurant": a judge miss, the same kind seen in the calibration.
 
+## Model choice and the hybrid orchestrator (2026-10-27, Bedrock)
+
+Added after production logs showed the agent inventing dishes and re-running a full search for "¿cómo preparo la segunda?". Guardrails off, recorded web data (`evals/fixtures.py`).
+
+**Profile suite, 30 cases, five cheap Bedrock models** (us-east-1 on-demand prices per million tokens):
+
+| Model | All fields correct | Median per call | Input / output price |
+|---|---|---|---|
+| Nova Lite (deployed) | 90% (misses "near me" / "around here") | 1.4 s | $0.06 / $0.24 |
+| **Nova 2 Lite** | **100%** | 1.6 s | $0.33 / $2.75 |
+| **gpt-oss-120b** | **100%** | 2.5 s | $0.15 / $0.60 |
+| Qwen3 32B | 97% | 1.4 s | $0.15 / $0.60 |
+| Ministral 3 14B | 97%, but no answer parsed as structured output | 1.3 s | $0.20 / $0.20 |
+
+Measured traffic is ~1,400 input and ~110 output tokens per call and about 6 calls per conversation, so every candidate costs well under $1 a month at demo traffic. Nova 2 Lite and gpt-oss-120b both passed the multi-turn suite; Nova 2 Lite was twice as fast per conversation.
+
+**Fixed routing vs hybrid orchestrator, multi-turn suite (14 conversations, Nova 2 Lite):**
+
+| Mode | Conversations passed | Median time per conversation |
+|---|---|---|
+| Fixed routing (`ORCHESTRATOR_ENABLED=false`) | 13 / 14 | 7.2 s |
+| Orchestrator, model asked again after every tool | 14 / 14 | 17.0 s |
+| **Orchestrator, plan then execute** | **14 / 14** | **9.2 s** |
+
+The fixed graph cannot serve a compound request (`m14`: "a moody Italian spot in Pasadena and what to order at the first one"); the orchestrator chains `search_restaurants` and `place_info`. The first version asked the model again after the tools only to hear it was done, which doubled the time; the model now plans its calls once, and gets another round only to fix an error or when the message asks for several things and only one call came (Nova 2 Lite plans one call at a time). With Nova Lite and the fixed routing (the deployed configuration) the suite passes 12 / 14: `m14` and `m06`, an ambiguous "recomiéndame algo para cenar" (recipe or restaurant).
+
+What the runs caught, all fixed with a test:
+- **Wrong place for a position.** The orchestrator passed "Sushi World" for "¿qué pido en el segundo?". Positions are now resolved in code; the model's name is ignored when the user gave a position and did not write that name.
+- **A search read as a name.** "Sushi en Laureles, Medellín" became a lookup of a restaurant called "Sushi en Laureles" ("its name suggests…"). A "name" made of the requested cuisine and a place is now a search, and the neighbourhood inside it is kept.
+- **A follow-up read as a search.** Nova Lite ran a new search for "háblame más del segundo"; with picks shown and no new place or cuisine in the message, a position means a follow-up.
+- **Unrequested work.** The orchestrator added the steps of the first pasta to a plain "dame una receta de pasta" list and repeated a web recipe; steps are fetched in the same turn only when the user asks how to cook.
+- **Allergy wording.** Nova 2 Lite called a dish "segura" for a peanut allergy; the safety-claim filter now removes bare "segura" / "safe for" sentences.
+
 ## Bugs the evaluations found in the product
 
 - **Allergy safety gap.** The recommender wrote "Thai Basil Chicken is a *peanut-free option*". The safety filter only removed "is peanut-free" without an article. Fixed in `security/allergens.py`, with a test.

@@ -1,8 +1,11 @@
 """Recipe follow-ups and web recipes: "¿cómo preparo la segunda?" and "receta de ajiaco" no longer
 re-run the whole search or answer with unrelated dishes."""
-import pytest
+import json
 
-from connoisseur import data, memory, recipes_web
+import pytest
+from tests.conftest import RECIPES_FIXTURE
+
+from connoisseur import memory, recipes_web
 from connoisseur.agents import nodes
 from connoisseur.places import tavily
 from connoisseur.places.tavily import WebSnippet
@@ -10,7 +13,8 @@ from connoisseur.schemas import UserContext, WebRecipe
 from connoisseur.security import spotlight
 from connoisseur.security.guardrails import GuardrailResult
 
-RECIPES = {r["name"]: r for r in data.load_recipes()}
+with open(RECIPES_FIXTURE, encoding="utf-8") as f:
+    RECIPES = {r["name"]: r for r in json.load(f)}
 CARDS = [memory.CardRef(n=1, type="restaurant", id="web:a", name="Della Nonna"),
          memory.CardRef(n=1, type="recipe", id=f"recipe:{RECIPES['Spaghetti Aglio e Olio']['id']}",
                         name="Spaghetti Aglio e Olio"),

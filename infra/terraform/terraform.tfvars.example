@@ -23,3 +23,11 @@ lambda_memory_mb         = 2048
 reserved_concurrency     = -1 # set e.g. 5 once the account concurrency quota is above 10
 daily_message_limit      = 30
 per_minute_message_limit = 6
+
+# Model the agents call (default: Nova Lite). Nova 2 Lite scored 100% on the profile evals and handles
+# the orchestrator's tool calls; it is a cross-region profile, so the foundation model goes in IAM too.
+# bedrock_model_id         = "us.amazon.nova-2-lite-v1:0"
+# bedrock_foundation_model = "amazon.nova-2-lite-v1:0"
+
+# Let an LLM choose the tools for each message instead of the fixed routing (needs the model above)
+# orchestrator_enabled = true

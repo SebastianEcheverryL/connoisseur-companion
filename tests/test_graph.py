@@ -26,7 +26,7 @@ RECIPES = [RecipeCandidate(id="recipe:7", name="Peanut Noodles", cuisine="Thai")
 
 def profile(intent, location=None, language="English", **kw):
     data = {"intent": intent, "language": language, "location": location, "near_me": False, "cuisines": [], "dietary": [],
-            "vibe": None, "budget": None, "occasion": None, "restaurant_name": None, "search_query": "vegan",
+            "vibe": None, "budget": None, "occasion": None, "restaurant_name": None, "dish": None, "search_query": "vegan",
             "dropped_preferences": []}
     return ProfileExtraction(**{**data, **kw})
 

@@ -11,7 +11,7 @@ When the user switches between a recipe and a restaurant request, start cuisines
 Fields:
 - intent: one of
   - "restaurant": wants restaurant recommendations ("where should I eat", "find a moody spot")
-  - "recipe": wants something to cook ("how do I make lasagna", "easy dinner recipe")
+  - "recipe": wants something to cook ("how do I make lasagna", "easy dinner recipe", "busca en internet una receta de ajiaco"), or how to prepare a recipe shown before ("¿cómo preparo la segunda?")
   - "both": wants restaurants and recipes ("dinner ideas")
   - "lookup": asks about a specific restaurant by name, its reviews or what to order there ("tell me about Sakura Garden", "¿qué platos me recomiendas en Carmen?"), or about one of the previous recommendations ("tell me more about the second one", "¿el primero tiene terraza?")
   - "clarification": greeting, thanks, or asks what you can do
@@ -26,6 +26,7 @@ Fields:
 - budget: "$", "$$", "$$$" or "$$$$" only when the user implies a price level, otherwise null. "Something cheaper" means one level below the known budget, or "$" when none is known.
 - occasion: e.g. "date night", "quick lunch", or null
 - restaurant_name: the restaurant asked about, for "lookup", otherwise null. When the user points to a previous recommendation ("the second one", "ese lugar"), copy its exact name from "Previous recommendations".
+- dish: for "recipe", the specific dish the user wants to cook, in English (e.g. "ajiaco", "lasagna", "chicken tikka masala"); when they point to a previous recipe ("¿cómo preparo la segunda?"), copy its exact name from "Previous recommendations". Null for general requests ("something easy with pasta") and for restaurant requests.
 - search_query: a short English search phrase that captures what to look for (cuisine + vibe + diet), e.g. "quiet vegan cafe" or "spicy Sichuan noodles"
 - dropped_preferences: diet items the user says no longer apply ("I'm not vegan anymore" → ["vegan"]), otherwise []
 

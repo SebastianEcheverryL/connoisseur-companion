@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     # Agent behaviour
     max_react_steps: int = 6
     enable_expert_analysis: bool = True
+    # An LLM chooses the tools for each message (agents/orchestrator.py) instead of the fixed intent routing.
+    # Needs a model with reliable tool use (Nova 2 Lite, gpt-oss-120b); the fixed routing stays as fallback.
+    orchestrator_enabled: bool = False
+    orchestrator_max_steps: int = 4
     min_local_results: int = 3
     # Verify the tool agent's answer against the tool results and remove unsupported claims (1 extra LLM call).
     # On by default: in repeated runs it cut invented facts from 27% to 7% (docs/evals/report.md)
@@ -90,6 +94,9 @@ class Settings(BaseSettings):
     # "What should I order at X?": one Tavily search over any site (menus live on the restaurant's own page)
     dish_search_results: int = 6
     max_dishes: int = 6
+    # Recipes the dataset does not have: one Tavily search with the page text of each result
+    web_recipe_results: int = 4
+    web_recipe_chars: int = 12000  # 8000 cut a tikka masala page before its last steps
     http_timeout_s: float = 20.0
     cache_dir: Path = Field(default=PROJECT_DIR / ".cache")
     cache_ttl_s: int = 24 * 3600

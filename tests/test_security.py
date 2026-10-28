@@ -110,7 +110,7 @@ def test_pii_redaction_keeps_benign_numbers():
 
 def _profile(intent="restaurant", location=None):
     return ProfileExtraction(intent=intent, language="English", location=location, near_me=False, cuisines=[],
-                             dietary=[], vibe=None, budget=None, occasion=None, restaurant_name=None,
+                             dietary=[], vibe=None, budget=None, occasion=None, restaurant_name=None, dish=None,
                              search_query="sushi", dropped_preferences=[])
 
 

@@ -29,6 +29,16 @@ STEP_LABELS = {
     "recommend": "Writing recommendations",
     "tool_agent": "Looking it up in the guide",
     "recall": "Looking up a place from earlier",
+    "recipe_detail": "Getting the recipe steps",
+    "web_recipe": "Searching the web for a recipe",
+    "orchestrator": "Deciding how to answer",
+    # The orchestrator's tools (custom stream events)
+    "search_restaurants": "Searching restaurants",
+    "place_info": "Looking up the restaurant",
+    "search_recipes": "Searching recipes",
+    "recipe_steps": "Getting the recipe steps",
+    "ask_user": "Asking for a detail",
+    "answer_canned": "Answering",
     "respond": "Answering",
 }
 
@@ -113,9 +123,14 @@ async def stream_chat(
         try:
             # A hard ceiling per request: slow models or hung tools must not hold resources forever
             async with asyncio.timeout(get_settings().request_timeout_s):
-                async for update in get_graph().astream(
-                    initial_state(message, history, coords, conversation), config=config, stream_mode="updates"
+                async for mode, update in get_graph().astream(
+                    initial_state(message, history, coords, conversation), config=config,
+                    stream_mode=["updates", "custom"],
                 ):
+                    if mode == "custom":  # a tool the orchestrator started
+                        node = update.get("node", "")
+                        yield {"type": "step", "node": node, "label": STEP_LABELS.get(node, node)}
+                        continue
                     for node, delta in update.items():
                         if node == "experts":
                             continue

@@ -230,7 +230,7 @@ def check_turn(result: dict, checks: dict, previous: list[dict]) -> dict[str, bo
     if "answer_mentions_card" in checks:
         ref = checks["answer_mentions_card"]
         earlier = previous[ref["turn"] - 1].get("cards", []) if len(previous) >= ref["turn"] else []
-        picks = [c for c in earlier if c.get("type") == "restaurant"]
+        picks = [c for c in earlier if c.get("type") == ref.get("type", "restaurant")]
         name = picks[ref["n"] - 1]["name"] if len(picks) >= ref["n"] else None
         out["answer_mentions_card"] = bool(name) and fold(name) in fold(result.get("answer"))
     return out
@@ -358,7 +358,8 @@ def to_markdown(report: dict) -> str:
     lines = [f"# Evaluation run `{report['tag']}`", "",
              f"- Date: {report['date']}", f"- LLM: `{report['llm']}` · judge: `{report['judge_model']}`",
              (f"- Guardrails: `{report['guardrails']}` · grounding check: `{report['grounding_check']}` · "
-              f"expert agents: `{report['expert_analysis']}`"), ""]
+              f"expert agents: `{report['expert_analysis']}` · "
+              f"orchestrator: `{report.get('orchestrator', False)}`"), ""]
     if "retrieval" in report:
         lines += ["## Retrieval (known-item search, no LLM)", "", "| Query set | n | hit@1 | hit@5 | MRR@10 |",
                   "|---|---|---|---|---|"]
@@ -444,6 +445,7 @@ def main() -> None:
         "llm": s.bedrock_model_id if s.llm_provider == "bedrock" else s.chat_model,
         "judge_model": args.judge_model or s.chat_model, "guardrails": s.guardrail_provider,
         "grounding_check": s.enable_grounding_check, "expert_analysis": s.enable_expert_analysis,
+        "orchestrator": s.orchestrator_enabled,
     }
 
     if args.rejudge:

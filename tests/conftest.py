@@ -1,5 +1,8 @@
 """Test configuration: no developer .env, no network caches, no dev UI, no tracing, no index."""
+import json
 import os
+
+import pytest
 
 # Must run before connoisseur.settings is imported anywhere (settings are cached)
 os.environ["CONNOISSEUR_ENV_FILE"] = os.path.join(os.path.dirname(__file__), ".env.does-not-exist")
@@ -14,3 +17,15 @@ os.environ.setdefault("DAILY_MESSAGE_LIMIT", "1000")
 os.environ.setdefault("CHROMA_DIR", os.path.join(os.path.dirname(__file__), ".no-index"))
 for var in ("TAVILY_API_KEY", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LLM_PROVIDER", "API_KEY", "MCP_TOKEN"):
     os.environ.pop(var, None)
+
+RECIPES_FIXTURE = os.path.join(os.path.dirname(__file__), "data", "recipes.json")
+
+
+@pytest.fixture(autouse=True)
+def _test_recipes(monkeypatch):
+    """data/Recipes.json is third-party data fetched by scripts/download_data.py (not in git or CI)."""
+    from connoisseur import data
+
+    with open(RECIPES_FIXTURE, encoding="utf-8") as f:
+        recipes = json.load(f)
+    monkeypatch.setattr(data, "load_recipes", lambda: recipes)

@@ -111,7 +111,23 @@ def discovery_text() -> str:
     return " ".join(f"{r.title} {r.content}" for r in DISCOVERY_RESULTS)
 
 
-async def fake_tavily_search(query, max_results=5, include_domains=None, ttl_s=None, max_chars=500):
+# A recipe page as Tavily returned its text on 2026-10-27 for "receta de ajiaco" (trimmed)
+AJIACO_PAGE = WebSnippet(
+    title="Ajiaco Colombiano - My Colombian Recipes",
+    url="https://www.mycolombianrecipes.com/es/ajiaco-colombiano",
+    content="Ajiaco Colombiano\nIngredientes\n3 pechugas de pollo, con hueso y sin piel\n12 tazas de agua\n"
+    "3 mazorcas de maíz fresco, cortadas en 2 piezas\n2 cubos de caldo de pollo\n3 cebollas largas\n"
+    "2 tazas de papa criolla\n3 papas blancas medianas, peladas y en rodajas\n⅓ taza de guascas\n"
+    "1 taza de crema espesa y alcaparras para servir\nPreparación\nEn una olla grande, colocar el pollo, el maíz, "
+    "el caldo de pollo y la cebolla larga. Agregar el agua y cocinar unos 35 a 40 minutos.\nRetirar la cebolla "
+    "larga y añadir las papas blancas y las guascas. Cocinar durante 30 minutos más.\nAgregar la papa criolla y "
+    "cocinar a fuego lento 15 a 20 minutos.\nServir el ajiaco caliente con alcaparras y crema de leche.",
+)
+
+
+async def fake_tavily_search(query, max_results=5, include_domains=None, ttl_s=None, max_chars=500, raw=False):
+    if raw:  # recipe pages: only the recorded ajiaco
+        return [AJIACO_PAGE.model_copy()] if "ajiaco" in query.lower() else []
     return [r.model_copy() for r in DISCOVERY_RESULTS]
 
 

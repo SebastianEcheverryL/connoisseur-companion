@@ -110,7 +110,7 @@ def test_pii_redaction_keeps_benign_numbers():
 
 def _profile(intent="restaurant", location=None):
     return ProfileExtraction(intent=intent, language="English", location=location, near_me=False, cuisines=[],
-                             dietary=[], vibe=None, budget=None, occasion=None, restaurant_name=None,
+                             dietary=[], vibe=None, budget=None, occasion=None, restaurant_name=None, dish=None,
                              search_query="sushi", dropped_preferences=[])
 
 
@@ -298,6 +298,13 @@ def test_safety_claims_are_stripped():
     assert allergens.strip_safety_claims(article) == "Quick to cook."
     es = "Un curry aromático. Es totalmente libre de maní y seguro para tu alergia. Fácil de hacer."
     assert allergens.strip_safety_claims(es) == "Un curry aromático. Fácil de hacer."
+    # Seen with Nova 2 Lite: a bare "segura" / "safe" is still a safety promise
+    intro = "Aquí tienes una opción deliciosa y segura que se ajusta a tus necesidades. Lleva fideos."
+    assert allergens.strip_safety_claims(intro) == "Lleva fideos."
+    assert allergens.strip_safety_claims("Lleva fideos. Es segura para alérgicos al maní.") == "Lleva fideos."
+    assert allergens.strip_safety_claims("Noodles with soy. This dish is safe for you.") == "Noodles with soy."
+    assert allergens.strip_safety_claims("Seguro que te encantará. Lleva fideos.") == ("Seguro que te encantará. "
+                                                                                        "Lleva fideos.")
 
 
 async def test_allergy_request_filters_recipes_and_adds_note(fake_llm, monkeypatch):

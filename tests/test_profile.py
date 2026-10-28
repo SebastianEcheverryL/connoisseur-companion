@@ -7,7 +7,7 @@ from connoisseur.schemas import ProfileExtraction, RecommendationSet
 
 FULL = {"intent": "restaurant", "language": "Spanish", "location": "Medellín", "near_me": False,
         "cuisines": ["sushi"], "dietary": [], "vibe": None, "budget": None, "occasion": None,
-        "restaurant_name": None, "search_query": "casual sushi", "dropped_preferences": []}
+        "restaurant_name": None, "dish": None, "search_query": "casual sushi", "dropped_preferences": []}
 
 
 def test_null_words_become_empty_values():

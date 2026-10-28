@@ -29,6 +29,7 @@ class ChatState(TypedDict, total=False):
     web_candidates: list[PlaceCandidate]
     web_snippets: list[WebSnippet]
     recipes: list[RecipeCandidate]
+    notice: str  # a line put before the recommendations ("no reliable web recipe for ajiaco")
 
     # Phase 3: expert analyses (run in parallel, each writes its own key)
     trend_analysis: str

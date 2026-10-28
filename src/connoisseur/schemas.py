@@ -31,6 +31,7 @@ class UserContext(BaseModel):
     budget: Literal["$", "$$", "$$$", "$$$$"] | None = None
     occasion: str | None = None
     restaurant_name: str | None = Field(default=None, description="Specific restaurant the user asks about")
+    dish: str | None = Field(default=None, description="Specific dish the user wants to cook, in English")
     search_query: str = Field(default="", description="Short semantic search query built from the request")
 
 
@@ -48,12 +49,13 @@ class ProfileExtraction(BaseModel):
     budget: Literal["$", "$$", "$$$", "$$$$"] | None
     occasion: str | None
     restaurant_name: str | None
+    dish: str | None
     search_query: str
     dropped_preferences: list[str] = Field(description="Diet items the user says no longer apply")
 
     # Models write missing values as words or placeholders: "Mexican null" reached the place search, and
     # Nova Lite answered location="(user's location)" and vibe="&quot;casual&quot;"
-    @field_validator("location", "vibe", "budget", "occasion", "restaurant_name", mode="before")
+    @field_validator("location", "vibe", "budget", "occasion", "restaurant_name", "dish", mode="before")
     @classmethod
     def _null_text(cls, value):
         return _clean(value)
@@ -96,7 +98,8 @@ PLACEHOLDER = re.compile(r"^\(.*\)$|^<.*>$|^\[.*\]$|^\{.*\}$|\bnot (specified|me
 # Same fallback as when the profile call fails outright: treat the message as a restaurant search
 PROFILE_DEFAULTS = {
     "intent": "restaurant", "language": "English", "location": None, "near_me": False, "cuisines": [],
-    "dietary": [], "vibe": None, "budget": None, "occasion": None, "restaurant_name": None, "search_query": "",
+    "dietary": [], "vibe": None, "budget": None, "occasion": None, "restaurant_name": None, "dish": None,
+    "search_query": "",
     "dropped_preferences": [],
 }
 
@@ -183,6 +186,13 @@ class ResultDishes(BaseModel):
 class DishExtraction(BaseModel):
     # Required on purpose (see ProfileExtraction): an empty object must not validate
     results: list[ResultDishes]
+
+
+class WebRecipe(BaseModel):
+    # Required on purpose (see ProfileExtraction): an empty object must not validate
+    name: str = Field(description="Recipe title as written on the page")
+    ingredients: list[str] = Field(description="Every ingredient with its quantity, as written on the page")
+    steps: list[str] = Field(description="The preparation steps in order, each one short")
 
 
 class Recommendation(BaseModel):

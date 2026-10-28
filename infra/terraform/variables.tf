@@ -55,6 +55,12 @@ variable "bedrock_foundation_model" {
   default     = "amazon.nova-lite-v1:0"
 }
 
+variable "orchestrator_enabled" {
+  description = "Let an LLM choose the tools for each message instead of the fixed routing (needs a model with reliable tool use, e.g. Nova 2 Lite)"
+  type        = bool
+  default     = false
+}
+
 variable "daily_message_limit" {
   type    = number
   default = 30

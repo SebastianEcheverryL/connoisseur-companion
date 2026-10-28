@@ -1,11 +1,14 @@
 """Nodes of the recommendation workflow. Each node reads the shared state and returns a partial update."""
+import hashlib
 import json
+import math
 import re
+from difflib import SequenceMatcher
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
-from connoisseur import data, memory
+from connoisseur import data, memory, recipes_web
 from connoisseur.agents import grounding
 from connoisseur.agents.prompts import load_prompt
 from connoisseur.agents.state import ChatState
@@ -39,6 +42,14 @@ TEXT = {
         "before you go.",
         "guide_dishes": "These are the signature dishes of **{name}** in the Connoisseur guide:",
         "which_place": "Which restaurant do you mean? Tell me its name (and the city) and I'll look it up.",
+        "which_recipe": "Which recipe do you mean? Tell me its name and I'll give you the steps.",
+        "ingredients": "Ingredients",
+        "steps": "Steps",
+        "servings": "servings",
+        "recipe_has_allergen": "This recipe has ingredients you said you are allergic to.",
+        "recipe_source": "Recipe from {link}. Check the original page for details.",
+        "no_web_recipe": "I couldn't find a reliable recipe for {dish} on the web. These are the closest ones "
+        "in my recipe collection:",
         "allergy_note": "Allergy note: I can't guarantee any dish is free of an allergen. Check the full ingredient "
         "list and ask the restaurant about cross-contamination before eating.",
         "blocked_input": "Sorry, I can't help with that. I'm here for restaurants, food and recipes.",
@@ -77,6 +88,14 @@ TEXT = {
         "antes de ir.",
         "guide_dishes": "Estos son los platos insignia de **{name}** según la Guía Connoisseur:",
         "which_place": "¿De cuál restaurante me hablas? Dime su nombre (y la ciudad) y lo busco.",
+        "which_recipe": "¿Cuál receta? Dime su nombre y te doy los pasos.",
+        "ingredients": "Ingredientes",
+        "steps": "Preparación",
+        "servings": "porciones",
+        "recipe_has_allergen": "Esta receta lleva ingredientes a los que dijiste ser alérgico.",
+        "recipe_source": "Receta de {link}. Revisa la página original para más detalles.",
+        "no_web_recipe": "No encontré en la web una receta confiable de {dish}. Estas son las más parecidas de mi "
+        "colección de recetas:",
         "allergy_note": "Nota sobre alergias: no puedo garantizar que un plato esté libre de un alérgeno. Revisa la "
         "lista completa de ingredientes y pregunta en el restaurante por contaminación cruzada antes de comer.",
         "blocked_input": "Lo siento, no puedo ayudarte con eso. Estoy aquí para restaurantes, comida y recetas.",
@@ -221,15 +240,22 @@ async def profile(state: ChatState) -> dict:
                           search_query=state["message"][:200])
     else:
         ctx = extracted.to_context()
+    if ctx.intent == "lookup" and ctx.restaurant_name and _is_search_phrase(ctx.restaurant_name, ctx):
+        # Nova 2 Lite read "Sushi en Laureles, Medellín" as a restaurant called "Sushi en Laureles"
+        ctx.location = _search_place(ctx.restaurant_name, ctx)
+        ctx.restaurant_name, ctx.intent = None, "restaurant"
     if (ctx.intent == "lookup" and (not ctx.restaurant_name or _is_reference(ctx.restaurant_name))
             and not _points_in(state["message"])):
         # After "¿De cuál restaurante me hablas?", Nova Lite took "Busco sushi en Laureles" for a lookup
         # (and copied "the first one" from the earlier turn): a search names a place or a cuisine itself
         ctx.restaurant_name = None
-        message = ratings.fold(state["message"])
-        named = [ctx.location.split(",")[0]] if ctx.location else []
-        if ctx.near_me or any(ratings.fold(v) in message for v in [*named, *ctx.cuisines] if v.strip()):
+        if ctx.near_me or _names_search(state["message"], ctx):
             ctx.intent = "restaurant"
+    elif (ctx.intent in ("restaurant", "both") and _ordinal(state["message"]) is not None
+          and any(card.type == "restaurant" for card in state.get("last_cards") or [])
+          and not _names_search(state["message"], ctx)):
+        # The other way round: Nova Lite ran a new search for "háblame más del segundo"
+        ctx.intent = "lookup"
     named_location = ctx.location
     known = memory.merge_profile(state.get("memory") or memory.Profile(), ctx, state["message"],
                                  extracted.dropped_preferences if extracted else [])
@@ -250,12 +276,53 @@ async def profile(state: ChatState) -> dict:
             "route": route}
 
 
+def _names_search(message: str, ctx: UserContext) -> bool:
+    """The message itself names a place or a cuisine of the request: a search, not a follow-up."""
+    folded = ratings.fold(message)
+    named = [ctx.location.split(",")[0]] if ctx.location else []
+    return any(ratings.fold(value) in folded for value in [*named, *ctx.cuisines] if value.strip())
+
+
+_SEARCH_WORDS = {"en", "in", "de", "near", "cerca", "around", "restaurant", "restaurants", "restaurante",
+                 "restaurantes", "comida", "food", "place", "places", "lugar", "lugares"}
+
+
+_CUISINE_IN_PLACE = re.compile(r"^(?P<what>.+?)\s+(?:en|in|near|cerca de)\s+(?P<where>.+)$", re.IGNORECASE)
+
+
+def _is_search_phrase(name: str, ctx: UserContext) -> bool:
+    """A "restaurant name" made only of the requested cuisine and place ("Sushi en Laureles") is a search.
+    "Sushi World" keeps a word of its own, so it stays a name."""
+    allowed = set(_SEARCH_WORDS)
+    # The search query too: Nova 2 Lite turned "sushi" into the cuisine "Japanese" but kept it in the query
+    for value in [*ctx.cuisines, ctx.search_query]:
+        allowed.update(re.findall(r"\w+", ratings.fold(value)))
+    if match := _CUISINE_IN_PLACE.match(name.strip()):
+        # "<cuisine> en <anything>": the tail is a place, even when the profile kept only the city
+        words = re.findall(r"\w+", ratings.fold(match["what"]))
+        return bool(ctx.cuisines) and bool(words) and all(word in allowed for word in words)
+    allowed.update(re.findall(r"\w+", ratings.fold(ctx.location or "")))
+    words = re.findall(r"\w+", ratings.fold(name))
+    return bool(ctx.cuisines) and bool(words) and all(word in allowed for word in words)
+
+
+def _search_place(name: str, ctx: UserContext) -> str | None:
+    """The place inside a search read as a name: "Sushi en Laureles" + city Medellín -> "Laureles, Medellín"."""
+    if not (match := _CUISINE_IN_PLACE.match(name.strip())):
+        return ctx.location
+    where = match["where"].strip()
+    if ctx.location and ratings.fold(ctx.location) not in ratings.fold(where):
+        return f"{where}, {ctx.location}"
+    return where
+
+
 def route_intent(state: ChatState) -> str:
     intent = state["context"].intent
     if intent in ("restaurant", "both"):
         return "locate"
-    if intent == "recipe":
-        return "retrieve_local"
+    if intent == "recipe" or (intent == "lookup" and asks_how_to_cook(state.get("message", ""))
+                              and _previous_card(state, "recipe")):
+        return _route_recipe(state)
     if intent == "lookup":
         card, name = _previous_card(state), state["context"].restaurant_name
         if card is None and _points_back(state):
@@ -272,6 +339,55 @@ def route_intent(state: ChatState) -> str:
             return "recall"
         return "tool_agent"
     return "respond"
+
+
+def _route_recipe(state: ChatState) -> str:
+    """Steps of a recipe shown before or named, a web recipe for a dish the dataset lacks, else a search.
+    Before this, "¿cómo preparo la segunda?" ran a new search and "receta de ajiaco" returned paella."""
+    ctx, message = state["context"], state.get("message", "")
+    if asks_how_to_cook(message) and _previous_card(state, "recipe"):
+        return "recipe_detail"
+    if ctx.dish:
+        matches = _local_recipes(ctx.dish)
+        if len(matches) == 1 and asks_how_to_cook(message):
+            return "recipe_detail"
+        if (not matches or wants_web(message)) and tavily.is_enabled():
+            return "web_recipe"
+    return "retrieve_local"
+
+
+_HOW_TO_COOK = re.compile(
+    r"\b(prepar\w*|cocin\w*|c[oó]mo se hace|c[oó]mo (lo|la|los|las) hago|hacer(lo|la)|receta completa|pasos|"
+    r"ingredientes|instrucciones|how (do|can|to) (i |you |we )?(make|cook|prepare)|steps|ingredients|"
+    r"instructions|directions)\b",
+    re.IGNORECASE,
+)
+_WEB = re.compile(r"\b(internet|web|online|en l[ií]nea|google|en la red)\b", re.IGNORECASE)
+_DISH_FILLER = {"with", "and", "the", "con", "de", "del", "la", "el", "los", "las", "recipe", "receta"}
+
+
+def asks_how_to_cook(text: str) -> bool:
+    return bool(_HOW_TO_COOK.search(text))
+
+
+def wants_web(text: str) -> bool:
+    return bool(_WEB.search(text))
+
+
+def _local_recipes(dish: str) -> list[dict]:
+    """Dataset recipes whose name has two thirds of the dish's words, allowing spelling variants
+    ("margarita" ~ "Margherita"; "pollo tikka masala" ~ "Chicken Tikka Masala", as Nova Lite left it in
+    Spanish). "pasta" matches several: then it is a search, not one recipe."""
+    words = [w for w in re.findall(r"\w+", ratings.fold(dish)) if len(w) > 2 and w not in _DISH_FILLER]
+    if not words:
+        return []
+    needed = math.ceil(len(words) * 2 / 3)
+
+    def has(name_words: list[str], word: str) -> bool:
+        return any(SequenceMatcher(None, word, other).ratio() >= 0.8 for other in name_words)
+
+    return [r for r in data.load_recipes()
+            if sum(has(re.findall(r"\w+", ratings.fold(r["name"])), w) for w in words) >= needed]
 
 
 _ORDINALS = (
@@ -307,30 +423,35 @@ def _is_reference(name: str | None) -> bool:
     return all(word in _POINTER_WORDS for word in words)
 
 
-def _previous_card(state: ChatState) -> memory.CardRef | None:
+def _previous_card(state: ChatState, kind: str = "restaurant") -> memory.CardRef | None:
     """The earlier recommendation the user is asking about: by name (the profile agent copies it), else by
-    position ("el segundo"), else the only restaurant shown when the user just says "there"."""
-    cards = state.get("last_cards") or []
-    name = state["context"].restaurant_name or ""
+    position ("el segundo"), else the only one shown when the user just says "there".
+
+    `kind` is "restaurant" (name from `restaurant_name`) or "recipe" (name from `dish`, or a shown recipe
+    the message names: "¿cómo preparo el Chow Mein?")."""
+    cards = [card for card in state.get("last_cards") or [] if card.type == kind]
+    ctx, message = state["context"], state.get("message", "")
+    name = (ctx.restaurant_name if kind == "restaurant" else ctx.dish) or ""
     if wanted := ratings.fold(name):
         for card in cards:
             folded = ratings.fold(card.name)
             if folded and (folded == wanted or folded in wanted or wanted in folded):
                 return card
+    if kind == "recipe" and (named := [c for c in cards if ratings.fold(c.name) in ratings.fold(message)]):
+        return named[0] if len(named) == 1 else None
     if name and not _is_reference(name):
         return None  # a real name that was not shown before ("¿y Carmen?")
-    restaurants = [card for card in cards if card.type == "restaurant"]
-    if position := _ordinal(name) or _ordinal(state.get("message", "")):
+    if position := _ordinal(name) or _ordinal(message):
         if position == -1:
-            return restaurants[-1] if restaurants else None
-        return next((card for card in restaurants if card.n == position), None)
-    if len(restaurants) == 1:
-        return restaurants[0]
+            return cards[-1] if cards else None
+        return next((card for card in cards if card.n == position), None)
+    if len(cards) == 1:
+        return cards[0]
     # "What is good to eat there?": the place the last answer talked about, when it named only one
     last = next((turn.get("content", "") for turn in reversed(state.get("history") or [])
                  if turn.get("role") == "assistant"), "")
-    named = [card for card in restaurants if ratings.fold(card.name) in ratings.fold(last)]
-    return named[0] if len(named) == 1 and _points_in(state.get("message", "")) else None
+    named = [card for card in cards if ratings.fold(card.name) in ratings.fold(last)]
+    return named[0] if len(named) == 1 and _points_in(message) else None
 
 
 # Unambiguous pointers only: "it" and "this" appear in plenty of general questions ("is it vegan friendly?")
@@ -461,6 +582,72 @@ async def respond(state: ChatState) -> dict:
     ctx = state["context"]
     key = ctx.intent if ctx.intent in ("database", "out_of_scope") else "help"
     return {"answer": t(ctx, key), "route": state["route"] + [f"canned:{key}"]}
+
+
+# ---------- recipes: steps of one recipe, or a recipe from the web ----------
+
+def _recipe_answer(ctx: UserContext, title: str, meta: list[str], ingredients: list[str], steps: list[str],
+                   allergies: set[str], source: str | None = None) -> str:
+    """Fixed-text recipe: what to buy and what to do, never rewritten by an LLM."""
+    lines = [title + (f" ({' · '.join(meta)})" if meta else "")]
+    if allergies and allergens.contains_allergen(ingredients, allergies):
+        lines.append(f"\n⚠️ **{t(ctx, 'recipe_has_allergen')}**")
+    lines += [f"\n**{t(ctx, 'ingredients')}**", *(f"- {item}" for item in ingredients)]
+    lines += [f"\n**{t(ctx, 'steps')}**", *(f"{i}. {step}" for i, step in enumerate(steps, 1))]
+    if source:
+        lines.append(f"\n_{source}_")
+    if allergies:
+        lines.append(f"\n⚠️ _{t(ctx, 'allergy_note')}_")
+    return "\n".join(lines)
+
+
+def _recipe_record(state: ChatState) -> dict | None:
+    """The dataset recipe the user means: a recipe card shown before, else the only one matching the dish."""
+    if card := _previous_card(state, "recipe"):
+        if card.id.startswith("recipe:"):
+            key = card.id.removeprefix("recipe:")
+            return next((r for r in data.load_recipes() if str(r["id"]) == key), None)
+        return None  # a web recipe: its steps were shown in full already
+    dish = state["context"].dish
+    matches = _local_recipes(dish) if dish else []
+    return matches[0] if len(matches) == 1 else None
+
+
+async def recipe_detail(state: ChatState) -> dict:
+    """"¿Cómo preparo la segunda?": ingredients and directions of that recipe, straight from the dataset."""
+    ctx = state["context"]
+    record = _recipe_record(state)
+    if record is None:
+        return {"answer": t(ctx, "which_recipe"), "cards": [], "route": state["route"] + ["recipe_detail:none"]}
+    meta = [record.get("cuisine"), record.get("total_time"),
+            f"{record['servings']} {t(ctx, 'servings')}" if record.get("servings") else None]
+    answer = _recipe_answer(ctx, f"**{record['name']}**", [m for m in meta if m], record.get("ingredients") or [],
+                            record.get("directions") or [], _allergies(state))
+    card = {"type": "recipe", "id": f"recipe:{record['id']}", "name": record["name"],
+            "cuisine": record.get("cuisine"), "ingredients": record.get("ingredients") or []}
+    return {"answer": answer, "cards": [card], "route": state["route"] + ["recipe_detail"],
+            "evidence": [json.dumps(record, ensure_ascii=False)]}
+
+
+async def web_recipe(state: ChatState) -> dict:
+    """A recipe for a dish the dataset does not have, read from one web page and checked against it."""
+    ctx = state["context"]
+    dish = ctx.dish or ctx.search_query
+    found = await recipes_web.find_recipe(dish, ctx.language)
+    if found is None:
+        # Fall back to the dataset, saying so: "receta de ajiaco" must not quietly become paella
+        return {"notice": t(ctx, "no_web_recipe").format(dish=dish), "route": state["route"] + ["web_recipe:none"]}
+    source = t(ctx, "recipe_source").format(link=f"[{found.site}]({found.url})")
+    answer = _recipe_answer(ctx, f"**{found.name}**", [found.site], found.ingredients, found.steps,
+                            _allergies(state), source)
+    card = {"type": "recipe", "id": "web:" + hashlib.sha256(found.url.encode()).hexdigest()[:16],
+            "name": found.name, "ingredients": found.ingredients, "source": "web", "url": found.url}
+    evidence = [f"Recipe on {found.site} ({found.url}): ingredients {found.ingredients}; steps {found.steps}"]
+    return {"answer": answer, "cards": [card], "route": state["route"] + ["web_recipe"], "evidence": evidence}
+
+
+def route_after_web_recipe(state: ChatState) -> str:
+    return "output_guard" if state.get("answer") else "retrieve_local"
 
 
 # ---------- phase 2: location and retrieval ----------
@@ -611,7 +798,8 @@ async def recommend(state: ChatState) -> dict:
 
     if not restaurants and not recipes:
         where = t(ctx, "near").format(place=location.display_name) if location else ""
-        return {"answer": t(ctx, "none").format(where=where), "cards": []}
+        answer = t(ctx, "none").format(where=where)
+        return {"answer": f"{state['notice']}\n\n{answer}" if state.get("notice") else answer, "cards": []}
 
     snippets = state.get("web_snippets") or []
     web_block = ""
@@ -644,6 +832,8 @@ async def recommend(state: ChatState) -> dict:
     picks = await structured_call(RecommendationSet, load_prompt("recommender"), user)
     allergies = _allergies(state)
     result = format_answer(picks, restaurants, recipes, ctx, location, allergies)
+    if notice := state.get("notice"):
+        result["answer"] = f"{notice}\n\n{result['answer']}"
     # What the recommender was allowed to rely on: used by groundedness evaluations
     result["evidence"] = [json.dumps(_candidate_line(c), ensure_ascii=False) for c in restaurants] + [
         r.model_dump_json(exclude={"score", "text_score", "image_score"}) for r in recipes

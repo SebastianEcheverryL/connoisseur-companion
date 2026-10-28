@@ -213,6 +213,41 @@ async def test_a_pointer_copied_from_an_earlier_turn_is_dropped(monkeypatch):
     assert out["context"].intent == "lookup"
 
 
+@pytest.mark.parametrize(("name", "search"), [
+    ("Sushi en Laureles", True), ("sushi Laureles Medellín", True), ("Sushi World", False), ("Kai Sushi Bar", False),
+])
+def test_a_name_made_of_the_cuisine_and_the_place_is_a_search(name, search):
+    ctx = UserContext(intent="lookup", cuisines=["sushi"], location="Laureles, Medellín")
+    assert nodes._is_search_phrase(name, ctx) is search
+
+
+def test_the_neighbourhood_in_a_search_read_as_a_name_is_kept():
+    # The profile kept only the city; the neighbourhood was inside the "name"
+    ctx = UserContext(intent="lookup", cuisines=["sushi"], location="Medellín")
+    assert nodes._is_search_phrase("Sushi en Laureles", ctx)
+    assert nodes._search_place("Sushi en Laureles", ctx) == "Laureles, Medellín"
+    assert not nodes._is_search_phrase("Sushi World en Laureles", ctx)
+    japanese = UserContext(intent="lookup", cuisines=["Japanese"], location="Medellín", search_query="sushi restaurant")
+    assert nodes._is_search_phrase("Sushi en Laureles", japanese)
+
+
+async def test_a_follow_up_read_as_a_new_search_is_a_lookup(monkeypatch):
+    from connoisseur.schemas import PROFILE_DEFAULTS, ProfileExtraction
+
+    async def structured_call(schema, system, user):  # what Nova Lite returned for "háblame más del segundo"
+        return ProfileExtraction.model_validate({**PROFILE_DEFAULTS, "intent": "restaurant", "language": "Spanish",
+                                                 "location": "Laureles, Medellín", "cuisines": ["sushi"]})
+
+    monkeypatch.setattr(nodes, "structured_call", structured_call)
+    shown = {"history": [], "route": [], "last_cards": CARDS}
+    out = await nodes.profile({**shown, "message": "háblame más del segundo"})
+    assert out["context"].intent == "lookup"
+    out = await nodes.profile({**shown, "message": "Busca otro sushi en Laureles, el segundo estuvo mal"})
+    assert out["context"].intent == "restaurant"  # names the cuisine and the place: a new search
+    out = await nodes.profile({"history": [], "route": [], "message": "háblame más del segundo"})
+    assert out["context"].intent == "restaurant"  # nothing shown before: nothing to follow up on
+
+
 async def test_a_search_read_as_a_lookup_without_a_name_is_a_search(monkeypatch):
     from connoisseur.schemas import PROFILE_DEFAULTS, ProfileExtraction
 

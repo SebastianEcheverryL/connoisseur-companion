@@ -15,6 +15,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from connoisseur.llm import get_chat_model
+from connoisseur.log import get_logger
+
+log = get_logger(__name__)
 
 GROUNDEDNESS_PROMPT = """You check an assistant's ANSWER against the EVIDENCE it was given (tool results or
 candidate records, in JSON or text).
@@ -53,11 +56,14 @@ class RelevanceVerdict(BaseModel):
 
 
 async def _ask(schema, system: str, user: str, model: str | None):
-    llm = get_chat_model(model=model, temperature=0).with_structured_output(schema)
+    # Always Ollama: with LLM_PROVIDER=bedrock the judge asked Bedrock for "llama3.1" and every judgement
+    # silently came back missing (2026-10-28)
+    llm = get_chat_model(model=model, temperature=0, provider="ollama").with_structured_output(schema)
     try:
         result = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
         return result if isinstance(result, schema) else schema.model_validate(result)
-    except Exception:  # noqa: BLE001 - a failed judgement is recorded as missing, not as a pass or fail
+    except Exception as exc:  # noqa: BLE001 - a failed judgement is recorded as missing, not as a pass or fail
+        log.warning("judge_failed", schema=schema.__name__, error=str(exc)[:200])
         return None
 
 

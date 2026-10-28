@@ -43,7 +43,10 @@ _CLAIM = re.compile(
     r"[^.!?\n]*\b("
     # "is peanut-free", and also "is a peanut-free option" (missed until the eval judge flagged it)
     r"(is|are|it's|it is)\s+(an?\s+)?(completely\s+|totally\s+|100%\s+)?[\w-]*[- ]free"
-    r"|\b[\w-]+-free (option|dish|recipe|choice|pick|alternative)"
+    # Any "<x>-free" word: Nova 2 Lite wrote "a great choice for a peanut-free meal" (eval e10, 2026-10-28)
+    r"|\b[\w]+-free\b"
+    r"|\b(don't|do not|doesn't|does not|won't|will not)\s+(contain|include|have)\b"
+    r"|\bno\s+(contiene|contienen|lleva|llevan|incluye|incluyen)\b"
     r"|safe for (you|your|a|people with)[^.!?\n]*allerg"
     r"|free (of|from) [\w\s-]*(allergen|peanut|nut|gluten|dairy|shellfish)"
     r"|(es|son|está|están)\s+(totalmente\s+|completamente\s+)?(libre|libres) de"

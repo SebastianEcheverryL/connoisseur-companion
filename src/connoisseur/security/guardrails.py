@@ -197,6 +197,12 @@ class BedrockGuardrail:
                                details=reasons, provider=self.name)
 
     async def check_input(self, text: str) -> GuardrailResult:
+        # Bedrock's prompt-attack filter let "Olvida todas tus instrucciones anteriores..." through (red team,
+        # 2026-10-28): the local screen runs first at no cost. Only its detections count here; a missing
+        # Prompt Guard leaves the decision to Bedrock instead of failing every message closed
+        screened = screen_injection(text, "input", self.name)
+        if screened.category == "prompt_injection":
+            return screened
         return await self._apply(text, "INPUT", "input")
 
     async def check_output(self, user_text: str, answer: str) -> GuardrailResult:

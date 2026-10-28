@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import json
 import re
+import sys
 import time
 import unicodedata
 import uuid
@@ -32,7 +33,8 @@ from evals.metrics import mean
 
 ROOT = Path(__file__).parent
 UNKNOWN_RE = re.compile(
-    r"(?i)\b(don't|do not|doesn't|does not) have (any |that |this )?(information|info|details|data)"
+    r"(?i)\b(don't|do not|doesn't|does not) have (any |that |this )?(access to |details on )?"
+    r"(information|info|details|data|reservation|opening|hours|contact)"
     r"|\bno (information|info|details|data)\b|\bnot (available|provided|mentioned|listed)\b"
     r"|\bno (tengo|dispongo de|hay) (informaci[oó]n|datos)"
 )
@@ -503,4 +505,5 @@ def save(report: dict, tag: str) -> str:
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8")  # the summary has arrows and accents; a Windows console has neither
     main()

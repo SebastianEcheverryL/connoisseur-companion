@@ -1,4 +1,6 @@
 """LLM provider factory: the rest of the code never imports a provider SDK directly."""
+from typing import Literal
+
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from connoisseur.settings import get_settings
@@ -8,16 +10,18 @@ def get_chat_model(
     model: str | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
+    provider: Literal["ollama", "bedrock"] | None = None,
 ) -> BaseChatModel:
     """Return a chat model for the configured provider.
 
-    `model` overrides the default model name (Ollama tag or Bedrock model id).
+    `model` overrides the default model name (Ollama tag or Bedrock model id); `provider` overrides
+    LLM_PROVIDER (the eval judge stays on Ollama while the agents run on Bedrock).
     """
     s = get_settings()
     temperature = s.llm_temperature if temperature is None else temperature
     max_tokens = max_tokens or s.llm_max_tokens
 
-    if s.llm_provider == "bedrock":
+    if (provider or s.llm_provider) == "bedrock":
         # Imported lazily so the local install does not need the AWS extras
         from langchain_aws import ChatBedrockConverse
 

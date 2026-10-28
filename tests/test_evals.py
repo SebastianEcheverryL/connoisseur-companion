@@ -36,6 +36,29 @@ def test_e2e_checks():
     assert check_e2e(result, {"tools_any": ["semantic_search"]}) == {"tools": False}
 
 
+@pytest.mark.parametrize(("answer", "passed"), [
+    (("I don't have access to reservation policies or contact information for Sakura Garden. To check if they "
+      "take reservations, contact the restaurant."), True),  # Nova 2 Lite's correct answer, failed before
+    ("Yes, Sakura Garden takes reservations online.", False),
+])
+def test_unknown_answers_do_not_count_as_claims(answer, passed):
+    checks = {"answer_must_not_claim": [r"(?i)(allows?|accepts?|takes?|offers?)\s+(for\s+)?(online\s+)?reservations"]}
+    assert check_e2e({"answer": answer}, checks) == {"answer_must_not_claim": passed}
+
+
+async def test_judge_runs_on_ollama_whatever_the_agents_use(monkeypatch):
+    seen = {}
+
+    def fake_model(**kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("model built, nothing to call")
+
+    monkeypatch.setattr(judge, "get_chat_model", fake_model)
+    with pytest.raises(RuntimeError):
+        await judge._ask(judge.RelevanceVerdict, "s", "u", "llama3.1")
+    assert seen["provider"] == "ollama" and seen["model"] == "llama3.1"
+
+
 @pytest.mark.parametrize(
     ("quote", "found"),
     [

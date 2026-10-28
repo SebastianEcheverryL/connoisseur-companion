@@ -334,6 +334,11 @@ def test_safety_claims_are_stripped():
     assert allergens.strip_safety_claims("Noodles with soy. This dish is safe for you.") == "Noodles with soy."
     assert allergens.strip_safety_claims("Seguro que te encantará. Lleva fideos.") == ("Seguro que te encantará. "
                                                                                         "Lleva fideos.")
+    # Nova 2 Lite with the orchestrator (eval e10): the claim hid behind "meal" and "don't contain"
+    curry = ("This Thai Green Curry is a great choice for a peanut-free meal. The main ingredients don't contain "
+             "peanuts, though you should check the label. It's flavorful and comforting.")
+    assert allergens.strip_safety_claims(curry) == "It's flavorful and comforting."
+    assert allergens.strip_safety_claims("Lleva coco. No contiene maní. Es rápida.") == "Lleva coco. Es rápida."
 
 
 async def test_allergy_request_filters_recipes_and_adds_note(fake_llm, monkeypatch):

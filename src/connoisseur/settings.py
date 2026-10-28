@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -104,7 +104,10 @@ class Settings(BaseSettings):
     # Observability: Langfuse (self-hosted locally with infra/langfuse, Langfuse Cloud in the demo)
     langfuse_public_key: str | None = None
     langfuse_secret_key: SecretStr | None = None
-    langfuse_host: str = "http://localhost:3000"
+    # LANGFUSE_BASE_URL is the name in the Langfuse SDK docs: a .env with only that one sent every trace to
+    # localhost, and each failed export added ~15 s to an answer
+    langfuse_host: str = Field(default="http://localhost:3000",
+                               validation_alias=AliasChoices("LANGFUSE_HOST", "LANGFUSE_BASE_URL"))
     langfuse_sample_rate: float = Field(default=1.0, ge=0.0, le=1.0)
     # Fetch agent prompts from Langfuse Prompt Management (local .md files remain the fallback)
     langfuse_prompts: bool = False

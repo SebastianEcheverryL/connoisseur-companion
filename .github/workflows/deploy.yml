@@ -48,7 +48,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - id: image
         run: echo "uri=${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY || 'connoisseur-prod' }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64

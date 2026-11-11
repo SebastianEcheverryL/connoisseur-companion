@@ -61,7 +61,7 @@ jobs:
           terraform validate
           terraform -chdir=bootstrap init -backend=false -input=false
           terraform -chdir=bootstrap validate
-      - uses: terraform-linters/setup-tflint@v4
+      - uses: terraform-linters/setup-tflint@v6
       - run: tflint --init && tflint --recursive
       # Every finding is either fixed or skipped inline with its reason (#checkov:skip=...)
       - uses: bridgecrewio/checkov-action@v12
